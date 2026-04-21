@@ -14,7 +14,174 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      audit_log: {
+        Row: {
+          action: string
+          created_at: string
+          id: number
+          payload: Json | null
+          player_id: string | null
+          room_id: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          id?: number
+          payload?: Json | null
+          player_id?: string | null
+          room_id?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          id?: number
+          payload?: Json | null
+          player_id?: string | null
+          room_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_log_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_log_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      players: {
+        Row: {
+          created_at: string
+          id: string
+          telegram_id: string
+          username: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          telegram_id: string
+          username: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          telegram_id?: string
+          username?: string
+        }
+        Relationships: []
+      }
+      room_players: {
+        Row: {
+          card: number[]
+          id: string
+          joined_at: string
+          marked: number[]
+          player_id: string
+          ready: boolean
+          room_id: string
+        }
+        Insert: {
+          card?: number[]
+          id?: string
+          joined_at?: string
+          marked?: number[]
+          player_id: string
+          ready?: boolean
+          room_id: string
+        }
+        Update: {
+          card?: number[]
+          id?: string
+          joined_at?: string
+          marked?: number[]
+          player_id?: string
+          ready?: boolean
+          room_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "room_players_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "room_players_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms: {
+        Row: {
+          call_interval_ms: number
+          call_sequence: number[]
+          code: string
+          created_at: string
+          current_index: number
+          finished_at: string | null
+          host_id: string
+          id: string
+          pattern: Database["public"]["Enums"]["win_pattern"]
+          started_at: string | null
+          status: Database["public"]["Enums"]["room_status"]
+          winner_id: string | null
+        }
+        Insert: {
+          call_interval_ms?: number
+          call_sequence?: number[]
+          code: string
+          created_at?: string
+          current_index?: number
+          finished_at?: string | null
+          host_id: string
+          id?: string
+          pattern?: Database["public"]["Enums"]["win_pattern"]
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["room_status"]
+          winner_id?: string | null
+        }
+        Update: {
+          call_interval_ms?: number
+          call_sequence?: number[]
+          code?: string
+          created_at?: string
+          current_index?: number
+          finished_at?: string | null
+          host_id?: string
+          id?: string
+          pattern?: Database["public"]["Enums"]["win_pattern"]
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["room_status"]
+          winner_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rooms_host_id_fkey"
+            columns: ["host_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rooms_winner_id_fkey"
+            columns: ["winner_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +190,8 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      room_status: "lobby" | "countdown" | "live" | "paused" | "finished"
+      win_pattern: "full_house"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +318,9 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      room_status: ["lobby", "countdown", "live", "paused", "finished"],
+      win_pattern: ["full_house"],
+    },
   },
 } as const
