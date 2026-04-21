@@ -1,4 +1,4 @@
-// Authoritative game engine for 100-ball Bingo
+// Authoritative game engine for 75-ball Bingo with stake/derash wallet
 // All mutations go through this edge function. Clients never write game state directly.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
@@ -13,8 +13,10 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-function shuffled1to100(): number[] {
-  const arr = Array.from({ length: 100 }, (_, i) => i + 1);
+const FREE = 0; // sentinel for the free center
+
+function shuffled1to75(): number[] {
+  const arr = Array.from({ length: 75 }, (_, i) => i + 1);
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -22,14 +24,34 @@ function shuffled1to100(): number[] {
   return arr;
 }
 
+// Generate a 5x5 card flattened to length 25.
+// Columns: B=1-15, I=16-30, N=31-45 (with FREE center), G=46-60, O=61-75.
 function generateCard(): number[] {
-  // 15 unique numbers 1-100, sorted ascending for nice display
-  const pool = Array.from({ length: 100 }, (_, i) => i + 1);
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+  const ranges = [
+    [1, 15],
+    [16, 30],
+    [31, 45],
+    [46, 60],
+    [61, 75],
+  ];
+  const cols: number[][] = ranges.map(([lo, hi]) => {
+    const pool = [];
+    for (let n = lo; n <= hi; n++) pool.push(n);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, 5);
+  });
+  // Flatten row-by-row: idx = row*5 + col
+  const flat: number[] = new Array(25).fill(0);
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
+      flat[row * 5 + col] = cols[col][row];
+    }
   }
-  return pool.slice(0, 15).sort((a, b) => a - b);
+  flat[12] = FREE; // center FREE
+  return flat;
 }
 
 function genRoomCode(): string {
@@ -38,6 +60,33 @@ function genRoomCode(): string {
   for (let i = 0; i < 5; i++)
     s += chars[Math.floor(Math.random() * chars.length)];
   return s;
+}
+
+// Single-line patterns: 5 rows + 5 cols + 2 diagonals
+function getLines(): number[][] {
+  const lines: number[][] = [];
+  for (let r = 0; r < 5; r++) lines.push([0, 1, 2, 3, 4].map((c) => r * 5 + c));
+  for (let c = 0; c < 5; c++) lines.push([0, 1, 2, 3, 4].map((r) => r * 5 + c));
+  lines.push([0, 6, 12, 18, 24]);
+  lines.push([4, 8, 12, 16, 20]);
+  return lines;
+}
+const LINES = getLines();
+const LINE_NAMES = [
+  "Row 1","Row 2","Row 3","Row 4","Row 5",
+  "Col B","Col I","Col N","Col G","Col O",
+  "Diagonal ↘","Diagonal ↙",
+];
+
+function detectWinningLine(card: number[], marked: number[]): { idx: number; name: string } | null {
+  const m = new Set(marked);
+  for (let i = 0; i < LINES.length; i++) {
+    const line = LINES[i];
+    if (line.every((pos) => m.has(card[pos]))) {
+      return { idx: i, name: LINE_NAMES[i] };
+    }
+  }
+  return null;
 }
 
 async function audit(
@@ -49,6 +98,18 @@ async function audit(
   await supabase
     .from("audit_log")
     .insert({ room_id, player_id, action, payload });
+}
+
+async function recordTx(
+  player_id: string,
+  room_id: string | null,
+  kind: "stake" | "payout" | "refund" | "seed",
+  amount: number,
+  balance_after: number,
+) {
+  await supabase
+    .from("transactions")
+    .insert({ player_id, room_id, kind, amount, balance_after });
 }
 
 function json(body: unknown, status = 200) {
@@ -70,34 +131,48 @@ Deno.serve(async (req) => {
         const { telegram_id, username } = args;
         if (!telegram_id || !username)
           return json({ error: "missing identity" }, 400);
+        const tid = String(telegram_id).slice(0, 64);
+        const uname = String(username).slice(0, 32);
         const { data: existing } = await supabase
           .from("players")
           .select("*")
-          .eq("telegram_id", String(telegram_id))
+          .eq("telegram_id", tid)
           .maybeSingle();
         if (existing) {
-          if (existing.username !== username) {
+          if (existing.username !== uname) {
             await supabase
               .from("players")
-              .update({ username })
+              .update({ username: uname })
               .eq("id", existing.id);
-            existing.username = username;
+            existing.username = uname;
           }
           return json({ player: existing });
         }
         const { data, error } = await supabase
           .from("players")
-          .insert({ telegram_id: String(telegram_id), username })
+          .insert({ telegram_id: tid, username: uname })
           .select()
           .single();
         if (error) return json({ error: error.message }, 500);
+        await recordTx(data.id, null, "seed", 1000, 1000);
         return json({ player: data });
       }
 
       case "create_room": {
-        const { player_id } = args;
+        const { player_id, stake_amount } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
-        // unique code with retry
+        const stake = Math.max(1, Math.min(500, Number(stake_amount) || 20));
+
+        // Check wallet
+        const { data: p } = await supabase
+          .from("players")
+          .select("*")
+          .eq("id", player_id)
+          .maybeSingle();
+        if (!p) return json({ error: "Player not found" }, 404);
+        if (p.wallet_balance < stake)
+          return json({ error: "Insufficient balance" }, 400);
+
         let code = "";
         for (let i = 0; i < 5; i++) {
           code = genRoomCode();
@@ -108,34 +183,65 @@ Deno.serve(async (req) => {
             .maybeSingle();
           if (!dup) break;
         }
+        const lobby_seconds = 30;
+        const lobby_ends_at = new Date(
+          Date.now() + lobby_seconds * 1000,
+        ).toISOString();
+
         const { data: room, error } = await supabase
           .from("rooms")
-          .insert({ code, host_id: player_id, call_sequence: shuffled1to100() })
+          .insert({
+            code,
+            host_id: player_id,
+            stake_amount: stake,
+            lobby_seconds,
+            lobby_ends_at,
+            call_sequence: shuffled1to75(),
+          })
           .select()
           .single();
         if (error) return json({ error: error.message }, 500);
-        // host auto-joins with a card
+
+        // Host stakes immediately
+        const newBal = p.wallet_balance - stake;
+        await supabase
+          .from("players")
+          .update({ wallet_balance: newBal })
+          .eq("id", player_id);
+        await recordTx(player_id, room.id, "stake", -stake, newBal);
+        await supabase
+          .from("rooms")
+          .update({ derash: stake })
+          .eq("id", room.id);
         await supabase.from("room_players").insert({
           room_id: room.id,
           player_id,
+          role: "player",
+          stake_paid: true,
           card: generateCard(),
         });
-        await audit(room.id, player_id, "create_room", { code });
-        return json({ room });
+        await audit(room.id, player_id, "create_room", { code, stake });
+        const { data: refreshed } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("id", room.id)
+          .maybeSingle();
+        return json({ room: refreshed });
       }
 
       case "join_room": {
         const { code, player_id } = args;
         if (!code || !player_id)
           return json({ error: "missing fields" }, 400);
+        const safeCode = String(code).toUpperCase().slice(0, 10);
         const { data: room } = await supabase
           .from("rooms")
           .select("*")
-          .eq("code", String(code).toUpperCase())
+          .eq("code", safeCode)
           .maybeSingle();
         if (!room) return json({ error: "Room not found" }, 404);
-        if (room.status !== "lobby" && room.status !== "live")
-          return json({ error: "Room not joinable" }, 400);
+        if (room.status === "finished")
+          return json({ error: "Game already finished" }, 400);
 
         const { data: existing } = await supabase
           .from("room_players")
@@ -143,19 +249,84 @@ Deno.serve(async (req) => {
           .eq("room_id", room.id)
           .eq("player_id", player_id)
           .maybeSingle();
-        if (!existing) {
+        if (existing) return json({ room });
+
+        // If lobby still open AND time remaining, attempt to stake & play.
+        // Otherwise enter as watcher.
+        const lobbyOpen =
+          room.status === "lobby" &&
+          room.lobby_ends_at &&
+          new Date(room.lobby_ends_at).getTime() > Date.now();
+
+        if (lobbyOpen) {
+          const { data: p } = await supabase
+            .from("players")
+            .select("*")
+            .eq("id", player_id)
+            .maybeSingle();
+          if (!p) return json({ error: "Player not found" }, 404);
+          if (p.wallet_balance < room.stake_amount) {
+            // Auto-fall through to watcher mode if they can't afford
+            await supabase.from("room_players").insert({
+              room_id: room.id,
+              player_id,
+              role: "watcher",
+              stake_paid: false,
+              card: [],
+            });
+            await audit(room.id, player_id, "join_watcher_no_funds", {});
+            return json({ room });
+          }
+          const newBal = p.wallet_balance - room.stake_amount;
+          await supabase
+            .from("players")
+            .update({ wallet_balance: newBal })
+            .eq("id", player_id);
+          await recordTx(
+            player_id,
+            room.id,
+            "stake",
+            -room.stake_amount,
+            newBal,
+          );
+          await supabase
+            .from("rooms")
+            .update({ derash: room.derash + room.stake_amount })
+            .eq("id", room.id);
           await supabase.from("room_players").insert({
             room_id: room.id,
             player_id,
+            role: "player",
+            stake_paid: true,
             card: generateCard(),
           });
-          await audit(room.id, player_id, "join_room", {});
+          await audit(room.id, player_id, "join_player", {
+            stake: room.stake_amount,
+          });
+        } else {
+          await supabase.from("room_players").insert({
+            room_id: room.id,
+            player_id,
+            role: "watcher",
+            stake_paid: false,
+            card: [],
+          });
+          await audit(room.id, player_id, "join_watcher", {});
         }
-        return json({ room });
+
+        const { data: refreshed } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("id", room.id)
+          .maybeSingle();
+        return json({ room: refreshed });
       }
 
       case "leave_room": {
         const { room_id, player_id } = args;
+        if (!room_id || !player_id)
+          return json({ error: "missing fields" }, 400);
+        // No refund once joined; that's the rule.
         await supabase
           .from("room_players")
           .delete()
@@ -165,83 +336,32 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       }
 
-      case "set_ready": {
-        const { room_id, player_id, ready } = args;
-        await supabase
-          .from("room_players")
-          .update({ ready: !!ready })
-          .eq("room_id", room_id)
-          .eq("player_id", player_id);
-        return json({ ok: true });
-      }
-
-      case "regenerate_card": {
-        const { room_id, player_id } = args;
-        const { data: room } = await supabase
-          .from("rooms")
-          .select("status")
-          .eq("id", room_id)
-          .maybeSingle();
-        if (!room || room.status !== "lobby")
-          return json({ error: "Cards locked once game starts" }, 400);
-        await supabase
-          .from("room_players")
-          .update({ card: generateCard(), marked: [] })
-          .eq("room_id", room_id)
-          .eq("player_id", player_id);
-        return json({ ok: true });
-      }
-
-      case "start_game": {
-        const { room_id, player_id } = args;
+      case "tick_lobby": {
+        // Idempotent: if lobby expired, transition to live.
+        const { room_id } = args;
+        if (!room_id) return json({ error: "missing room_id" }, 400);
         const { data: room } = await supabase
           .from("rooms")
           .select("*")
           .eq("id", room_id)
           .maybeSingle();
         if (!room) return json({ error: "Room not found" }, 404);
-        if (room.host_id !== player_id)
-          return json({ error: "Only host can start" }, 403);
-        if (room.status !== "lobby")
-          return json({ error: "Game already started" }, 400);
+        if (room.status !== "lobby") return json({ ok: true });
+        if (
+          !room.lobby_ends_at ||
+          new Date(room.lobby_ends_at).getTime() > Date.now()
+        )
+          return json({ ok: true });
+
+        // Count actual paid players
         const { count } = await supabase
           .from("room_players")
           .select("*", { count: "exact", head: true })
-          .eq("room_id", room_id);
-        if (!count || count < 1)
-          return json({ error: "Need at least 1 player" }, 400);
+          .eq("room_id", room_id)
+          .eq("role", "player");
 
-        await supabase
-          .from("rooms")
-          .update({
-            status: "live",
-            started_at: new Date().toISOString(),
-            current_index: -1,
-            call_sequence: shuffled1to100(),
-            winner_id: null,
-          })
-          .eq("id", room_id);
-        // reset all marks
-        await supabase
-          .from("room_players")
-          .update({ marked: [] })
-          .eq("room_id", room_id);
-        await audit(room_id, player_id, "start_game", {});
-        return json({ ok: true });
-      }
-
-      case "call_next": {
-        // Anyone in the room can trigger the tick; we use timestamp guard later if needed.
-        const { room_id } = args;
-        const { data: room } = await supabase
-          .from("rooms")
-          .select("*")
-          .eq("id", room_id)
-          .maybeSingle();
-        if (!room) return json({ error: "Room not found" }, 404);
-        if (room.status !== "live") return json({ ok: true, skipped: true });
-        const next = room.current_index + 1;
-        if (next >= room.call_sequence.length) {
+        if (!count || count < 1) {
+          // No one to play; finish the room
           await supabase
             .from("rooms")
             .update({
@@ -251,88 +371,73 @@ Deno.serve(async (req) => {
             .eq("id", room_id);
           return json({ ok: true, finished: true });
         }
+
         await supabase
           .from("rooms")
-          .update({ current_index: next })
+          .update({
+            status: "live",
+            started_at: new Date().toISOString(),
+            current_index: -1,
+          })
           .eq("id", room_id);
-        return json({ ok: true, index: next });
+        await audit(room_id, null, "lobby_to_live", { players: count });
+        return json({ ok: true, started: true });
       }
 
-      case "pause_resume": {
-        const { room_id, player_id } = args;
+      case "call_next": {
+        const { room_id } = args;
+        if (!room_id) return json({ error: "missing room_id" }, 400);
         const { data: room } = await supabase
           .from("rooms")
           .select("*")
           .eq("id", room_id)
           .maybeSingle();
-        if (!room || room.host_id !== player_id)
-          return json({ error: "forbidden" }, 403);
-        const next = room.status === "live" ? "paused" : "live";
-        if (room.status !== "live" && room.status !== "paused")
-          return json({ error: "not running" }, 400);
-        await supabase
-          .from("rooms")
-          .update({ status: next })
-          .eq("id", room_id);
-        await audit(room_id, player_id, "pause_resume", { next });
-        return json({ ok: true, status: next });
-      }
-
-      case "end_game": {
-        const { room_id, player_id } = args;
-        const { data: room } = await supabase
-          .from("rooms")
-          .select("host_id")
-          .eq("id", room_id)
-          .maybeSingle();
-        if (!room || room.host_id !== player_id)
-          return json({ error: "forbidden" }, 403);
-        await supabase
-          .from("rooms")
-          .update({
-            status: "finished",
-            finished_at: new Date().toISOString(),
-          })
-          .eq("id", room_id);
-        return json({ ok: true });
-      }
-
-      case "mark_number": {
-        const { room_id, player_id, number } = args;
-        const { data: room } = await supabase
-          .from("rooms")
-          .select("call_sequence,current_index,status")
-          .eq("id", room_id)
-          .maybeSingle();
         if (!room) return json({ error: "Room not found" }, 404);
-        if (room.status !== "live")
-          return json({ error: "Game not live" }, 400);
-        const called = room.call_sequence.slice(0, room.current_index + 1);
-        if (!called.includes(number))
-          return json({ error: "Number not called yet" }, 400);
+        if (room.status !== "live") return json({ ok: true, skipped: true });
 
-        const { data: rp } = await supabase
-          .from("room_players")
-          .select("card,marked")
-          .eq("room_id", room_id)
-          .eq("player_id", player_id)
-          .maybeSingle();
-        if (!rp) return json({ error: "Not in room" }, 404);
-        if (!rp.card.includes(number))
-          return json({ error: "Not on your card" }, 400);
-        if (rp.marked.includes(number)) return json({ ok: true });
-
-        const marked = [...rp.marked, number];
+        const next = room.current_index + 1;
+        if (next >= room.call_sequence.length) {
+          // House keeps the pot if no one bingo'd by all 75 calls
+          await supabase
+            .from("rooms")
+            .update({
+              status: "finished",
+              finished_at: new Date().toISOString(),
+            })
+            .eq("id", room_id);
+          return json({ ok: true, finished: true });
+        }
+        const newNumber = room.call_sequence[next];
         await supabase
+          .from("rooms")
+          .update({ current_index: next })
+          .eq("id", room_id);
+
+        // Auto-daub for all players in this room
+        const { data: rps } = await supabase
           .from("room_players")
-          .update({ marked })
+          .select("*")
           .eq("room_id", room_id)
-          .eq("player_id", player_id);
-        return json({ ok: true });
+          .eq("role", "player");
+
+        if (rps) {
+          for (const rp of rps) {
+            if (rp.card.includes(newNumber) && !rp.marked.includes(newNumber)) {
+              const marked = [...rp.marked, newNumber];
+              await supabase
+                .from("room_players")
+                .update({ marked })
+                .eq("id", rp.id);
+            }
+          }
+        }
+        return json({ ok: true, index: next, number: newNumber });
       }
 
       case "claim_bingo": {
         const { room_id, player_id } = args;
+        if (!room_id || !player_id)
+          return json({ error: "missing fields" }, 400);
         const { data: room } = await supabase
           .from("rooms")
           .select("*")
@@ -345,63 +450,51 @@ Deno.serve(async (req) => {
 
         const { data: rp } = await supabase
           .from("room_players")
-          .select("card,marked")
+          .select("*")
           .eq("room_id", room_id)
           .eq("player_id", player_id)
           .maybeSingle();
-        if (!rp) return json({ error: "Not in room" }, 404);
+        if (!rp || rp.role !== "player")
+          return json({ error: "Not a player" }, 403);
 
-        const called = new Set(
-          room.call_sequence.slice(0, room.current_index + 1),
-        );
-        // full_house: every card number must be called AND marked
-        const allCalled = rp.card.every((n: number) => called.has(n));
-        const allMarked = rp.card.every((n: number) => rp.marked.includes(n));
-        if (!allCalled || !allMarked) {
-          await audit(room_id, player_id, "claim_invalid", {
-            allCalled,
-            allMarked,
-          });
-          return json({ error: "Invalid bingo" }, 400);
+        const win = detectWinningLine(rp.card, rp.marked);
+        if (!win) {
+          await audit(room_id, player_id, "claim_invalid", {});
+          return json({ error: "No completed line" }, 400);
         }
+
+        // Award derash (full pot - house cut already excluded? We compute payout = derash * (1 - commission))
+        const payout = Math.floor(
+          (room.derash * (100 - room.house_commission_pct)) / 100,
+        );
+
+        const { data: winner } = await supabase
+          .from("players")
+          .select("*")
+          .eq("id", player_id)
+          .maybeSingle();
+        if (!winner) return json({ error: "Player vanished" }, 500);
+        const newBal = winner.wallet_balance + payout;
+        await supabase
+          .from("players")
+          .update({ wallet_balance: newBal })
+          .eq("id", player_id);
+        await recordTx(player_id, room_id, "payout", payout, newBal);
 
         await supabase
           .from("rooms")
           .update({
             status: "finished",
             winner_id: player_id,
+            winning_line: win.name,
             finished_at: new Date().toISOString(),
           })
           .eq("id", room_id);
-        await audit(room_id, player_id, "claim_valid", {});
-        return json({ ok: true, winner: true });
-      }
-
-      case "next_round": {
-        const { room_id, player_id } = args;
-        const { data: room } = await supabase
-          .from("rooms")
-          .select("host_id,status")
-          .eq("id", room_id)
-          .maybeSingle();
-        if (!room || room.host_id !== player_id)
-          return json({ error: "forbidden" }, 403);
-        await supabase
-          .from("rooms")
-          .update({
-            status: "lobby",
-            current_index: -1,
-            call_sequence: shuffled1to100(),
-            winner_id: null,
-            started_at: null,
-            finished_at: null,
-          })
-          .eq("id", room_id);
-        await supabase
-          .from("room_players")
-          .update({ marked: [], card: generateCard(), ready: false })
-          .eq("room_id", room_id);
-        return json({ ok: true });
+        await audit(room_id, player_id, "claim_valid", {
+          line: win.name,
+          payout,
+        });
+        return json({ ok: true, winner: true, payout, line: win.name });
       }
 
       default:

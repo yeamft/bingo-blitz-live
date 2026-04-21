@@ -62,18 +62,21 @@ export type Database = {
           id: string
           telegram_id: string
           username: string
+          wallet_balance: number
         }
         Insert: {
           created_at?: string
           id?: string
           telegram_id: string
           username: string
+          wallet_balance?: number
         }
         Update: {
           created_at?: string
           id?: string
           telegram_id?: string
           username?: string
+          wallet_balance?: number
         }
         Relationships: []
       }
@@ -84,8 +87,9 @@ export type Database = {
           joined_at: string
           marked: number[]
           player_id: string
-          ready: boolean
+          role: Database["public"]["Enums"]["room_player_role"]
           room_id: string
+          stake_paid: boolean
         }
         Insert: {
           card?: number[]
@@ -93,8 +97,9 @@ export type Database = {
           joined_at?: string
           marked?: number[]
           player_id: string
-          ready?: boolean
+          role?: Database["public"]["Enums"]["room_player_role"]
           room_id: string
+          stake_paid?: boolean
         }
         Update: {
           card?: number[]
@@ -102,8 +107,9 @@ export type Database = {
           joined_at?: string
           marked?: number[]
           player_id?: string
-          ready?: boolean
+          role?: Database["public"]["Enums"]["room_player_role"]
           room_id?: string
+          stake_paid?: boolean
         }
         Relationships: [
           {
@@ -129,13 +135,18 @@ export type Database = {
           code: string
           created_at: string
           current_index: number
+          derash: number
           finished_at: string | null
           host_id: string
+          house_commission_pct: number
           id: string
-          pattern: Database["public"]["Enums"]["win_pattern"]
+          lobby_ends_at: string | null
+          lobby_seconds: number
+          stake_amount: number
           started_at: string | null
           status: Database["public"]["Enums"]["room_status"]
           winner_id: string | null
+          winning_line: string | null
         }
         Insert: {
           call_interval_ms?: number
@@ -143,13 +154,18 @@ export type Database = {
           code: string
           created_at?: string
           current_index?: number
+          derash?: number
           finished_at?: string | null
           host_id: string
+          house_commission_pct?: number
           id?: string
-          pattern?: Database["public"]["Enums"]["win_pattern"]
+          lobby_ends_at?: string | null
+          lobby_seconds?: number
+          stake_amount?: number
           started_at?: string | null
           status?: Database["public"]["Enums"]["room_status"]
           winner_id?: string | null
+          winning_line?: string | null
         }
         Update: {
           call_interval_ms?: number
@@ -157,13 +173,18 @@ export type Database = {
           code?: string
           created_at?: string
           current_index?: number
+          derash?: number
           finished_at?: string | null
           host_id?: string
+          house_commission_pct?: number
           id?: string
-          pattern?: Database["public"]["Enums"]["win_pattern"]
+          lobby_ends_at?: string | null
+          lobby_seconds?: number
+          stake_amount?: number
           started_at?: string | null
           status?: Database["public"]["Enums"]["room_status"]
           winner_id?: string | null
+          winning_line?: string | null
         }
         Relationships: [
           {
@@ -182,6 +203,51 @@ export type Database = {
           },
         ]
       }
+      transactions: {
+        Row: {
+          amount: number
+          balance_after: number
+          created_at: string
+          id: number
+          kind: Database["public"]["Enums"]["tx_kind"]
+          player_id: string
+          room_id: string | null
+        }
+        Insert: {
+          amount: number
+          balance_after: number
+          created_at?: string
+          id?: number
+          kind: Database["public"]["Enums"]["tx_kind"]
+          player_id: string
+          room_id?: string | null
+        }
+        Update: {
+          amount?: number
+          balance_after?: number
+          created_at?: string
+          id?: number
+          kind?: Database["public"]["Enums"]["tx_kind"]
+          player_id?: string
+          room_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transactions_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transactions_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -190,8 +256,9 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      room_status: "lobby" | "countdown" | "live" | "paused" | "finished"
-      win_pattern: "full_house"
+      room_player_role: "player" | "watcher"
+      room_status: "lobby" | "live" | "finished"
+      tx_kind: "stake" | "payout" | "refund" | "seed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -319,8 +386,9 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      room_status: ["lobby", "countdown", "live", "paused", "finished"],
-      win_pattern: ["full_house"],
+      room_player_role: ["player", "watcher"],
+      room_status: ["lobby", "live", "finished"],
+      tx_kind: ["stake", "payout", "refund", "seed"],
     },
   },
 } as const
