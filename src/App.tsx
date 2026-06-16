@@ -9,6 +9,7 @@ import HistoryPage from "./pages/History.tsx";
 import WalletPage from "./pages/Wallet.tsx";
 import ProfilePage from "./pages/Profile.tsx";
 import Room from "./pages/Room.tsx";
+import AdminPage from "./pages/Admin.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
@@ -27,6 +28,7 @@ const App = () => (
             <Route path="/wallet" element={<WalletPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
+          <Route path="/admin" element={<AdminPage />} />
           <Route path="/room/:code" element={<Room />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

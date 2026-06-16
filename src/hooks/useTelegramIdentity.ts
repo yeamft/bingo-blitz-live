@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, Player } from "@/lib/api";
+import { api, getErrorMessage, Player } from "@/lib/api";
 
 // Telegram WebApp shape (minimal)
 type TgUser = { id: number; username?: string; first_name?: string };
@@ -39,6 +39,7 @@ function getOrCreateMockIdentity(): { id: string; username: string } {
 export function useTelegramIdentity() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +60,15 @@ export function useTelegramIdentity() {
       }
       try {
         const { player } = await api.upsertPlayer(telegram_id, username);
-        if (!cancelled) setPlayer(player);
+        if (!cancelled) {
+          setPlayer(player);
+          setError(null);
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          setPlayer(null);
+          setError(getErrorMessage(error));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -69,7 +78,7 @@ export function useTelegramIdentity() {
     };
   }, []);
 
-  return { player, loading };
+  return { player, loading, error };
 }
 
 export function haptic(kind: "light" | "medium" | "heavy" | "success" | "error" | "warning" = "light") {

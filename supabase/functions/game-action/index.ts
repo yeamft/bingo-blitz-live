@@ -114,6 +114,58 @@ function combineCards(cartelas: number[]): number[] {
   return cartelas.flatMap((cartela) => generateCardFromCartela(cartela));
 }
 
+async function upgradeCartelasInLobby(
+  room: {
+    id: string;
+    stake_amount: number;
+    derash: number;
+    status: string;
+    lobby_ends_at: string | null;
+  },
+  existing: {
+    id: string;
+    role: string;
+    player_id: string;
+    selected_cartelas?: number[] | null;
+  },
+  requestedCartelas: number[],
+): Promise<void> {
+  const lobbyOpen =
+    room.status === "lobby" &&
+    room.lobby_ends_at &&
+    new Date(room.lobby_ends_at).getTime() > Date.now();
+  if (!lobbyOpen || existing.role !== "player") return;
+
+  const current = normalizeCartelas(existing.selected_cartelas ?? []);
+  const requested = normalizeCartelas(requestedCartelas);
+  if (requested.length <= current.length) return;
+
+  const merged = [...new Set(requested)].slice(0, 3);
+  if (merged.length <= current.length) return;
+
+  const added = merged.length - current.length;
+  const additionalStake = room.stake_amount * added;
+  const playerWallet = normalizePlayerWallets(await getPlayerOrThrow(existing.player_id));
+  if (playerWallet.play_wallet_balance < additionalStake) return;
+
+  const newBal = playerWallet.play_wallet_balance - additionalStake;
+  await updatePlayerWallets(existing.player_id, { play_wallet_balance: newBal });
+  await recordTx(existing.player_id, room.id, "stake", -additionalStake, newBal);
+  await supabase
+    .from("rooms")
+    .update({ derash: room.derash + additionalStake })
+    .eq("id", room.id);
+  await supabase
+    .from("room_players")
+    .update({ selected_cartelas: merged, card: combineCards(merged) })
+    .eq("id", existing.id);
+  await audit(room.id, existing.player_id, "upgrade_cartelas", {
+    from: current,
+    to: merged,
+    additionalStake,
+  });
+}
+
 function splitCards(combined: number[]): number[][] {
   const cards: number[][] = [];
   for (let i = 0; i < combined.length; i += 25) {
@@ -162,7 +214,12 @@ function detectWinningLine(card: number[], marked: number[]): { idx: number; nam
   const m = new Set(marked);
   for (let i = 0; i < LINES.length; i++) {
     const line = LINES[i];
-    if (line.every((pos) => m.has(card[pos]))) {
+    if (
+      line.every((pos) => {
+        const n = card[pos];
+        return n === FREE || m.has(n);
+      })
+    ) {
       return { idx: i, name: LINE_NAMES[i] };
     }
   }
@@ -194,7 +251,7 @@ async function audit(
 async function recordTx(
   player_id: string,
   room_id: string | null,
-  kind: "stake" | "payout" | "refund" | "seed",
+  kind: "stake" | "payout" | "refund" | "seed" | "deposit" | "withdrawal" | "transfer_to_play",
   amount: number,
   balance_after: number,
 ) {
@@ -203,11 +260,152 @@ async function recordTx(
     .insert({ player_id, room_id, kind, amount, balance_after });
 }
 
+async function getPlayerOrThrow(player_id: string) {
+  const { data: player } = await supabase
+    .from("players")
+    .select("*")
+    .eq("id", player_id)
+    .maybeSingle();
+
+  if (!player) throw new Error("Player not found");
+  return player;
+}
+
+function normalizePlayerWallets<T extends { wallet_balance?: number | null; main_wallet_balance?: number | null; play_wallet_balance?: number | null }>(player: T) {
+  const play = Number(player.play_wallet_balance ?? player.wallet_balance ?? 0);
+  const main = Number(player.main_wallet_balance ?? player.wallet_balance ?? 0);
+  return {
+    ...player,
+    main_wallet_balance: main,
+    play_wallet_balance: play,
+    wallet_balance: play,
+  };
+}
+
+async function updatePlayerWallets(
+  player_id: string,
+  next: { main_wallet_balance?: number; play_wallet_balance?: number },
+) {
+  const payload: Record<string, number> = {};
+  if (typeof next.main_wallet_balance === "number") payload.main_wallet_balance = next.main_wallet_balance;
+  if (typeof next.play_wallet_balance === "number") {
+    payload.play_wallet_balance = next.play_wallet_balance;
+    payload.wallet_balance = next.play_wallet_balance;
+  }
+  if (!Object.keys(payload).length) return;
+
+  await supabase.from("players").update(payload).eq("id", player_id);
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function sanitizeRoomName(value: unknown, isPrivate: boolean) {
+  const fallback = isPrivate ? "Private Room" : "Beteseb Room";
+  const normalized = typeof value === "string" ? value.trim().slice(0, 60) : "";
+  return normalized || fallback;
+}
+
+function normalizeStake(isPrivate: boolean, stakeAmount: unknown) {
+  const stake = Math.max(1, Math.min(500, Number(stakeAmount) || 20));
+  const allowed = isPrivate ? [10, 20, 50, 100] : [10, 20];
+  if (!allowed.includes(stake)) throw new Error(`Invalid ${isPrivate ? "private" : "public"} stake`);
+  return stake;
+}
+
+function normalizeMaxPlayers(raw: unknown, isPrivate: boolean) {
+  if (!isPrivate) return 500;
+  const value = Math.trunc(Number(raw) || 10);
+  return Math.max(2, Math.min(200, value));
+}
+
+async function joinExistingPublicRoom(
+  room: {
+    id: string;
+    code: string;
+    stake_amount: number;
+    derash: number;
+    max_players?: number | null;
+  },
+  player_id: string,
+  cartelas: number[],
+) {
+  const { data: existing } = await supabase
+    .from("room_players")
+    .select("*")
+    .eq("room_id", room.id)
+    .eq("player_id", player_id)
+    .maybeSingle();
+
+  if (existing) {
+    await upgradeCartelasInLobby(room, existing, cartelas);
+    const { data: refreshed } = await supabase
+      .from("rooms")
+      .select("*")
+      .eq("id", room.id)
+      .maybeSingle();
+    return refreshed ?? room;
+  }
+
+  const totalStake = room.stake_amount * cartelas.length;
+  const { count: activePlayers } = await supabase
+    .from("room_players")
+    .select("*", { count: "exact", head: true })
+    .eq("room_id", room.id)
+    .eq("role", "player");
+
+  if ((activePlayers ?? 0) >= Number(room.max_players ?? 500)) {
+    throw new Error("Room is full");
+  }
+
+  const playerWallet = normalizePlayerWallets(await getPlayerOrThrow(player_id));
+  if (playerWallet.play_wallet_balance < totalStake) {
+    throw new Error("Insufficient balance");
+  }
+
+  const newBal = playerWallet.play_wallet_balance - totalStake;
+  await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
+  await recordTx(player_id, room.id, "stake", -totalStake, newBal);
+  await supabase
+    .from("rooms")
+    .update({ derash: room.derash + totalStake })
+    .eq("id", room.id);
+
+  await supabase.from("room_players").insert({
+    room_id: room.id,
+    player_id,
+    role: "player",
+    stake_paid: true,
+    selected_cartelas: cartelas,
+    auto_fill: true,
+    false_claims: 0,
+    card: combineCards(cartelas),
+    marked: [FREE],
+  });
+
+  await audit(room.id, player_id, "join_public_room_via_create", {
+    stakePerCard: room.stake_amount,
+    totalStake,
+    cartelas,
+  });
+
+  const { data: refreshed } = await supabase
+    .from("rooms")
+    .select("*")
+    .eq("id", room.id)
+    .maybeSingle();
+
+  return refreshed ?? room;
+}
+
+async function requireAdmin(player_id: string) {
+  const player = normalizePlayerWallets(await getPlayerOrThrow(player_id));
+  if (!(player as { is_admin?: boolean }).is_admin) throw new Error("Admin access required");
+  return player;
 }
 
 Deno.serve(async (req) => {
@@ -237,7 +435,7 @@ Deno.serve(async (req) => {
               .eq("id", existing.id);
             existing.username = uname;
           }
-          return json({ player: existing });
+          return json({ player: normalizePlayerWallets(existing) });
         }
         const { data, error } = await supabase
           .from("players")
@@ -245,16 +443,49 @@ Deno.serve(async (req) => {
           .select()
           .single();
         if (error) return json({ error: error.message }, 500);
-        await recordTx(data.id, null, "seed", 1000, 1000);
-        return json({ player: data });
+        const seeded = normalizePlayerWallets(data);
+        await updatePlayerWallets(data.id, {
+          main_wallet_balance: seeded.main_wallet_balance,
+          play_wallet_balance: seeded.play_wallet_balance,
+        });
+        await recordTx(data.id, null, "seed", seeded.play_wallet_balance, seeded.play_wallet_balance);
+        return json({ player: seeded });
       }
 
       case "create_room": {
-        const { player_id, stake_amount, selected_cartelas, is_private } = args;
+        const { player_id, stake_amount, selected_cartelas, is_private, room_name, max_players, password } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
-        const stakePerCard = Math.max(1, Math.min(500, Number(stake_amount) || 20));
+        const privateRoom = Boolean(is_private);
+        const stakePerCard = normalizeStake(privateRoom, stake_amount);
+        const roomName = sanitizeRoomName(room_name, privateRoom);
+        const maxPlayers = normalizeMaxPlayers(max_players, privateRoom);
+        const roomPassword = privateRoom && typeof password === "string" && password.trim()
+          ? password.trim().slice(0, 40)
+          : null;
         const cartelas = normalizeCartelas(selected_cartelas);
         const totalStake = stakePerCard * cartelas.length;
+
+        if (!privateRoom) {
+          const { data: existingPublicRoom } = await supabase
+            .from("rooms")
+            .select("*")
+            .eq("is_private", false)
+            .eq("stake_amount", stakePerCard)
+            .in("status", ["lobby", "live", "paused"])
+            .eq("closed_by_admin", false)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (existingPublicRoom) {
+            try {
+              const joinedRoom = await joinExistingPublicRoom(existingPublicRoom, String(player_id), cartelas);
+              return json({ room: joinedRoom });
+            } catch (error) {
+              return json({ error: error instanceof Error ? error.message : "Unable to join public room" }, 400);
+            }
+          }
+        }
 
         // Check wallet
         const { data: p } = await supabase
@@ -263,7 +494,8 @@ Deno.serve(async (req) => {
           .eq("id", player_id)
           .maybeSingle();
         if (!p) return json({ error: "Player not found" }, 404);
-        if (p.wallet_balance < totalStake)
+        const playerWallet = normalizePlayerWallets(p);
+        if (playerWallet.play_wallet_balance < totalStake)
           return json({ error: "Insufficient balance" }, 400);
 
         let code = "";
@@ -286,7 +518,10 @@ Deno.serve(async (req) => {
           .insert({
             code,
             game_id: genGameId(),
-            is_private: Boolean(is_private),
+            is_private: privateRoom,
+            room_name: roomName,
+            max_players: maxPlayers,
+            room_password: roomPassword,
             host_id: player_id,
             stake_amount: stakePerCard,
             lobby_seconds,
@@ -298,11 +533,8 @@ Deno.serve(async (req) => {
         if (error) return json({ error: error.message }, 500);
 
         // Host stakes immediately
-        const newBal = p.wallet_balance - totalStake;
-        await supabase
-          .from("players")
-          .update({ wallet_balance: newBal })
-          .eq("id", player_id);
+        const newBal = playerWallet.play_wallet_balance - totalStake;
+        await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
         await recordTx(player_id, room.id, "stake", -totalStake, newBal);
         await supabase
           .from("rooms")
@@ -317,13 +549,16 @@ Deno.serve(async (req) => {
           auto_fill: true,
           false_claims: 0,
           card: combineCards(cartelas),
+          marked: [FREE],
         });
         await audit(room.id, player_id, "create_room", {
           code,
           stakePerCard,
           totalStake,
           cartelas,
-          isPrivate: Boolean(is_private),
+          isPrivate: privateRoom,
+          roomName,
+          maxPlayers,
         });
         const { data: refreshed } = await supabase
           .from("rooms")
@@ -334,7 +569,7 @@ Deno.serve(async (req) => {
       }
 
       case "join_room": {
-        const { code, player_id, selected_cartelas } = args;
+        const { code, player_id, selected_cartelas, password } = args;
         if (!code || !player_id)
           return json({ error: "missing fields" }, 400);
         const safeCode = String(code).toUpperCase().slice(0, 10);
@@ -348,6 +583,16 @@ Deno.serve(async (req) => {
         if (!room) return json({ error: "Room not found" }, 404);
         if (room.status === "finished")
           return json({ error: "Game already finished" }, 400);
+        if ((room as { closed_by_admin?: boolean }).closed_by_admin) {
+          return json({ error: "Room closed by admin" }, 400);
+        }
+        if (
+          (room as { is_private?: boolean; room_password?: string | null }).is_private &&
+          (room as { room_password?: string | null }).room_password &&
+          (room as { room_password?: string | null }).room_password !== String(password ?? "")
+        ) {
+          return json({ error: "Invalid room password" }, 403);
+        }
 
         const { data: existing } = await supabase
           .from("room_players")
@@ -355,7 +600,15 @@ Deno.serve(async (req) => {
           .eq("room_id", room.id)
           .eq("player_id", player_id)
           .maybeSingle();
-        if (existing) return json({ room });
+        if (existing) {
+          await upgradeCartelasInLobby(room, existing, cartelas);
+          const { data: refreshed } = await supabase
+            .from("rooms")
+            .select("*")
+            .eq("id", room.id)
+            .maybeSingle();
+          return json({ room: refreshed ?? room });
+        }
 
         // If lobby still open AND time remaining, attempt to stake & play.
         // Otherwise enter as watcher.
@@ -365,6 +618,14 @@ Deno.serve(async (req) => {
           new Date(room.lobby_ends_at).getTime() > Date.now();
 
         if (lobbyOpen) {
+          const { count: activePlayers } = await supabase
+            .from("room_players")
+            .select("*", { count: "exact", head: true })
+            .eq("room_id", room.id)
+            .eq("role", "player");
+          if ((activePlayers ?? 0) >= Number((room as { max_players?: number }).max_players ?? 500)) {
+            return json({ error: "Room is full" }, 400);
+          }
           const { data: p } = await supabase
             .from("players")
             .select("*")
@@ -372,7 +633,8 @@ Deno.serve(async (req) => {
             .maybeSingle();
           if (!p) return json({ error: "Player not found" }, 404);
           const totalStake = joinStake(room);
-          if (p.wallet_balance < totalStake) {
+          const playerWallet = normalizePlayerWallets(p);
+          if (playerWallet.play_wallet_balance < totalStake) {
             await supabase.from("room_players").insert({
               room_id: room.id,
               player_id,
@@ -388,11 +650,8 @@ Deno.serve(async (req) => {
             });
             return json({ room });
           }
-          const newBal = p.wallet_balance - totalStake;
-          await supabase
-            .from("players")
-            .update({ wallet_balance: newBal })
-            .eq("id", player_id);
+          const newBal = playerWallet.play_wallet_balance - totalStake;
+          await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
           await recordTx(
             player_id,
             room.id,
@@ -413,6 +672,7 @@ Deno.serve(async (req) => {
             auto_fill: true,
             false_claims: 0,
             card: combineCards(cartelas),
+            marked: [FREE],
           });
           await audit(room.id, player_id, "join_player", {
             stakePerCard: room.stake_amount,
@@ -586,11 +846,9 @@ Deno.serve(async (req) => {
             .eq("id", player_id)
             .maybeSingle();
           if (claimer) {
-            const penalizedBalance = Math.max(0, claimer.wallet_balance - penalty);
-            await supabase
-              .from("players")
-              .update({ wallet_balance: penalizedBalance })
-              .eq("id", player_id);
+            const playerWallet = normalizePlayerWallets(claimer);
+            const penalizedBalance = Math.max(0, playerWallet.play_wallet_balance - penalty);
+            await updatePlayerWallets(player_id, { play_wallet_balance: penalizedBalance });
             await recordTx(player_id, room_id, "stake", -penalty, penalizedBalance);
           }
           await supabase
@@ -598,7 +856,7 @@ Deno.serve(async (req) => {
             .update({ false_claims: (rp.false_claims || 0) + 1 })
             .eq("id", rp.id);
           await audit(room_id, player_id, "claim_invalid", { penalty });
-          return json({ error: "No completed line", penalty }, 400);
+          return json({ ok: false, error: "No completed line", penalty });
         }
 
         // Pause for host/community verification first.
@@ -646,11 +904,9 @@ Deno.serve(async (req) => {
             .eq("id", winnerId)
             .maybeSingle();
           if (!winner) return json({ error: "Player vanished" }, 500);
-          const newBal = winner.wallet_balance + payout;
-          await supabase
-            .from("players")
-            .update({ wallet_balance: newBal })
-            .eq("id", winnerId);
+          const winnerWallet = normalizePlayerWallets(winner);
+          const newBal = winnerWallet.play_wallet_balance + payout;
+          await updatePlayerWallets(winnerId, { play_wallet_balance: newBal });
           await recordTx(winnerId, room_id, "payout", payout, newBal);
 
           await supabase
@@ -676,11 +932,9 @@ Deno.serve(async (req) => {
           .eq("id", room.pending_winner_id)
           .maybeSingle();
         if (claimer) {
-          const penalizedBalance = Math.max(0, claimer.wallet_balance - penalty);
-          await supabase
-            .from("players")
-            .update({ wallet_balance: penalizedBalance })
-            .eq("id", claimer.id);
+          const playerWallet = normalizePlayerWallets(claimer);
+          const penalizedBalance = Math.max(0, playerWallet.play_wallet_balance - penalty);
+          await updatePlayerWallets(claimer.id, { play_wallet_balance: penalizedBalance });
           await recordTx(claimer.id, room_id, "stake", -penalty, penalizedBalance);
         }
         await supabase
@@ -741,6 +995,300 @@ Deno.serve(async (req) => {
 
         const marked = [...rp.marked, numeric];
         await supabase.from("room_players").update({ marked }).eq("id", rp.id);
+        return json({ ok: true });
+      }
+
+      case "get_wallet_summary": {
+        const { player_id } = args;
+        if (!player_id) return json({ error: "missing player_id" }, 400);
+
+        const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
+        const [{ data: transactions }, { data: requests }] = await Promise.all([
+          supabase
+            .from("transactions")
+            .select("*")
+            .eq("player_id", player.id)
+            .order("created_at", { ascending: false })
+            .limit(20),
+          supabase
+            .from("wallet_requests")
+            .select("*")
+            .eq("player_id", player.id)
+            .order("created_at", { ascending: false })
+            .limit(20),
+        ]);
+
+        return json({
+          player,
+          summary: {
+            total_balance: player.main_wallet_balance + player.play_wallet_balance,
+            main_wallet_balance: player.main_wallet_balance,
+            play_wallet_balance: player.play_wallet_balance,
+          },
+          transactions: transactions ?? [],
+          requests: requests ?? [],
+        });
+      }
+
+      case "transfer_to_play_wallet": {
+        const { player_id, amount } = args;
+        const numericAmount = Math.trunc(Number(amount) || 0);
+        if (!player_id || numericAmount <= 0) return json({ error: "invalid transfer" }, 400);
+
+        const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
+        if (player.main_wallet_balance < numericAmount) {
+          return json({ error: "Insufficient main wallet balance" }, 400);
+        }
+
+        const nextMain = player.main_wallet_balance - numericAmount;
+        const nextPlay = player.play_wallet_balance + numericAmount;
+        await updatePlayerWallets(player.id, {
+          main_wallet_balance: nextMain,
+          play_wallet_balance: nextPlay,
+        });
+        await recordTx(player.id, null, "transfer_to_play", numericAmount, nextPlay);
+        await audit(null, player.id, "transfer_to_play_wallet", { amount: numericAmount });
+
+        return json({
+          ok: true,
+          player: {
+            ...player,
+            main_wallet_balance: nextMain,
+            play_wallet_balance: nextPlay,
+            wallet_balance: nextPlay,
+          },
+        });
+      }
+
+      case "request_deposit": {
+        const { player_id, amount, note } = args;
+        const numericAmount = Math.trunc(Number(amount) || 0);
+        if (!player_id || numericAmount <= 0) return json({ error: "invalid deposit request" }, 400);
+
+        await getPlayerOrThrow(String(player_id));
+        const { data: request, error } = await supabase
+          .from("wallet_requests")
+          .insert({
+            player_id,
+            kind: "deposit",
+            amount: numericAmount,
+            note: typeof note === "string" ? note.slice(0, 240) : null,
+          })
+          .select("*")
+          .single();
+        if (error) return json({ error: error.message }, 500);
+
+        await audit(null, String(player_id), "request_deposit", { amount: numericAmount, note });
+        return json({ ok: true, request });
+      }
+
+      case "request_withdrawal": {
+        const { player_id, amount, note } = args;
+        const numericAmount = Math.trunc(Number(amount) || 0);
+        if (!player_id || numericAmount <= 0) return json({ error: "invalid withdrawal request" }, 400);
+
+        const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
+        if (player.main_wallet_balance < numericAmount) {
+          return json({ error: "Insufficient main wallet balance" }, 400);
+        }
+
+        const { data: request, error } = await supabase
+          .from("wallet_requests")
+          .insert({
+            player_id,
+            kind: "withdrawal",
+            amount: numericAmount,
+            note: typeof note === "string" ? note.slice(0, 240) : null,
+          })
+          .select("*")
+          .single();
+        if (error) return json({ error: error.message }, 500);
+
+        await audit(null, String(player_id), "request_withdrawal", { amount: numericAmount, note });
+        return json({ ok: true, request });
+      }
+
+      case "list_transactions": {
+        const { player_id } = args;
+        if (!player_id) return json({ error: "missing player_id" }, 400);
+
+        const [{ data: transactions }, { data: requests }] = await Promise.all([
+          supabase.from("transactions").select("*").eq("player_id", player_id).order("created_at", { ascending: false }),
+          supabase.from("wallet_requests").select("*").eq("player_id", player_id).order("created_at", { ascending: false }),
+        ]);
+
+        return json({ transactions: transactions ?? [], requests: requests ?? [] });
+      }
+
+      case "get_admin_summary": {
+        const { player_id } = args;
+        if (!player_id) return json({ error: "missing player_id" }, 400);
+        await requireAdmin(String(player_id));
+
+        const [
+          { count: totalUsers },
+          { count: activeRooms },
+          { count: liveRooms },
+          { count: pendingWalletRequests },
+          { data: rooms },
+          { data: transactions },
+          { data: requests },
+          { data: users },
+          { data: auditLogs },
+        ] = await Promise.all([
+          supabase.from("players").select("*", { count: "exact", head: true }),
+          supabase.from("rooms").select("*", { count: "exact", head: true }).in("status", ["lobby", "live", "paused"]),
+          supabase.from("rooms").select("*", { count: "exact", head: true }).eq("status", "live"),
+          supabase.from("wallet_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
+          supabase.from("rooms").select("*").order("created_at", { ascending: false }).limit(8),
+          supabase.from("transactions").select("*").order("created_at", { ascending: false }).limit(12),
+          supabase.from("wallet_requests").select("*").order("created_at", { ascending: false }).limit(12),
+          supabase.from("players").select("*").order("created_at", { ascending: false }).limit(20),
+          supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(20),
+        ]);
+
+        const totalRevenue = (transactions ?? [])
+          .filter((tx: { kind: string }) => tx.kind === "stake")
+          .reduce((sum: number, tx: { amount?: number }) => sum + Math.abs(Number(tx.amount || 0)), 0);
+        const totalPayouts = (transactions ?? [])
+          .filter((tx: { kind: string }) => tx.kind === "payout")
+          .reduce((sum: number, tx: { amount?: number }) => sum + Number(tx.amount || 0), 0);
+        const totalDeposits = (transactions ?? [])
+          .filter((tx: { kind: string }) => tx.kind === "deposit")
+          .reduce((sum: number, tx: { amount?: number }) => sum + Number(tx.amount || 0), 0);
+        const totalWithdrawals = (transactions ?? [])
+          .filter((tx: { kind: string }) => tx.kind === "withdrawal")
+          .reduce((sum: number, tx: { amount?: number }) => sum + Math.abs(Number(tx.amount || 0)), 0);
+
+        return json({
+          totals: {
+            total_users: totalUsers ?? 0,
+            active_rooms: activeRooms ?? 0,
+            live_rooms: liveRooms ?? 0,
+            pending_wallet_requests: pendingWalletRequests ?? 0,
+            total_revenue: totalRevenue,
+            total_payouts: totalPayouts,
+            total_deposits: totalDeposits,
+            total_withdrawals: totalWithdrawals,
+            net_profit: totalRevenue - totalPayouts,
+          },
+          rooms: rooms ?? [],
+          transactions: transactions ?? [],
+          requests: requests ?? [],
+          users: users ?? [],
+          audit_logs: auditLogs ?? [],
+        });
+      }
+
+      case "admin_set_user_admin": {
+        const { player_id, target_player_id, is_admin } = args;
+        if (!player_id || !target_player_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        const { data: updated, error } = await supabase
+          .from("players")
+          .update({ is_admin: Boolean(is_admin) })
+          .eq("id", target_player_id)
+          .select("*")
+          .single();
+        if (error) return json({ error: error.message }, 500);
+        await audit(null, admin.id, "admin_set_user_admin", { target_player_id, is_admin: Boolean(is_admin) });
+        return json({ ok: true, player: normalizePlayerWallets(updated) });
+      }
+
+      case "admin_adjust_wallet": {
+        const { player_id, target_player_id, wallet, amount, reason } = args;
+        const numericAmount = Math.trunc(Number(amount) || 0);
+        if (!player_id || !target_player_id || !wallet || numericAmount === 0) {
+          return json({ error: "invalid wallet adjustment" }, 400);
+        }
+        const admin = await requireAdmin(String(player_id));
+        const target = normalizePlayerWallets(await getPlayerOrThrow(String(target_player_id)));
+        if (wallet === "main") {
+          await updatePlayerWallets(target.id, { main_wallet_balance: Math.max(0, target.main_wallet_balance + numericAmount) });
+        } else if (wallet === "play") {
+          await updatePlayerWallets(target.id, { play_wallet_balance: Math.max(0, target.play_wallet_balance + numericAmount) });
+        } else {
+          return json({ error: "invalid wallet" }, 400);
+        }
+        const refreshed = normalizePlayerWallets(await getPlayerOrThrow(target.id));
+        await recordTx(target.id, null, numericAmount >= 0 ? "deposit" : "withdrawal", numericAmount, wallet === "main" ? refreshed.main_wallet_balance : refreshed.play_wallet_balance);
+        await audit(null, admin.id, "admin_adjust_wallet", { target_player_id, wallet, amount: numericAmount, reason });
+        return json({ ok: true, player: refreshed });
+      }
+
+      case "process_wallet_request": {
+        const { player_id, request_id, approve } = args;
+        if (!player_id || !request_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+
+        const { data: request } = await supabase
+          .from("wallet_requests")
+          .select("*")
+          .eq("id", request_id)
+          .maybeSingle();
+        if (!request) return json({ error: "Wallet request not found" }, 404);
+        if (request.status !== "pending") return json({ error: "Request already processed" }, 400);
+
+        const target = normalizePlayerWallets(await getPlayerOrThrow(String(request.player_id)));
+        const approved = approve !== false;
+
+        if (approved) {
+          if (request.kind === "deposit") {
+            const nextMain = target.main_wallet_balance + Number(request.amount);
+            await updatePlayerWallets(target.id, { main_wallet_balance: nextMain });
+            await recordTx(target.id, null, "deposit", Number(request.amount), nextMain);
+          } else {
+            if (target.main_wallet_balance < Number(request.amount)) {
+              return json({ error: "Insufficient main wallet balance" }, 400);
+            }
+            const nextMain = target.main_wallet_balance - Number(request.amount);
+            await updatePlayerWallets(target.id, { main_wallet_balance: nextMain });
+            await recordTx(target.id, null, "withdrawal", -Number(request.amount), nextMain);
+          }
+        }
+
+        const { data: updated, error } = await supabase
+          .from("wallet_requests")
+          .update({
+            status: approved ? "approved" : "rejected",
+            processed_by: admin.id,
+            processed_at: new Date().toISOString(),
+          })
+          .eq("id", request.id)
+          .select("*")
+          .single();
+        if (error) return json({ error: error.message }, 500);
+
+        await audit(null, admin.id, approved ? "wallet_request_approved" : "wallet_request_rejected", {
+          request_id: request.id,
+          target_player_id: request.player_id,
+          kind: request.kind,
+          amount: request.amount,
+        });
+        return json({ ok: true, request: updated });
+      }
+
+      case "admin_close_room": {
+        const { player_id, room_id } = args;
+        if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+
+        const { data: room } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("id", room_id)
+          .maybeSingle();
+        if (!room) return json({ error: "Room not found" }, 404);
+
+        await supabase
+          .from("rooms")
+          .update({
+            closed_by_admin: true,
+            status: "finished",
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", room_id);
+        await audit(room_id, admin.id, "admin_close_room", { code: room.code, previous_status: room.status });
         return json({ ok: true });
       }
 

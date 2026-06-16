@@ -65,6 +65,13 @@ export const t = {
   roomNotFound: { en: "Room not found", am: "ክፍል አልተገኘም" },
   invalidLine: { en: "No completed line", am: "የተጠናቀቀ መስመር የለም" },
   free: { en: "FREE", am: "ነጻ" },
+  cardsActive: { en: "Cards", am: "ካርዶች" },
+  active: { en: "Active", am: "ንቁ" },
+  buyCard: { en: "Buy Card", am: "ካርድ ግዛ" },
+  globalAutoFill: { en: "Global Auto Fill", am: "አጠቃላይ ራስ-ሙላ" },
+  globalDaubProgress: { en: "Global daub progress", am: "አጠቃላይ ሂደት" },
+  toBingo: { en: "TO BINGO", am: "ወደ ቢንጎ" },
+  cartela: { en: "Cartela", am: "ካርቴላ" },
 };
 
 export function useLang() {
