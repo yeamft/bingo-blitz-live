@@ -476,13 +476,20 @@ const Index = () => {
       ) : step === "lobby" ? (
         <section className="space-y-2.5">
           <div className="flex items-center justify-between px-1">
-            <div>
-              <h2 className="text-base font-black">Bingo Lobby</h2>
-              <p className="text-[11px] text-muted-foreground">Real-time games grouped by stake amount.</p>
-            </div>
+            <button
+              type="button"
+              onClick={() => setStep("entry")}
+              className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold text-muted-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> {t("back")}
+            </button>
             <Button variant="secondary" size="sm" className="h-8 px-3 text-[11px]" onClick={() => window.location.reload()}>
               Refresh
             </Button>
+          </div>
+          <div>
+            <h2 className="text-base font-black">Bingo Lobby</h2>
+            <p className="text-[11px] text-muted-foreground">Real-time games grouped by stake amount.</p>
           </div>
 
           {lobbyCards.map((card) => (
