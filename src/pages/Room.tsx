@@ -4,6 +4,7 @@ import { useTelegramIdentity, haptic } from "@/hooks/useTelegramIdentity";
 import { useRoomState } from "@/hooks/useRoomState";
 import { api, getErrorMessage } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { BingoCard } from "@/components/bingo/BingoCard";
@@ -263,10 +264,16 @@ function RoomInner({
   }
 
   async function handleAutoFillToggle(checked: boolean) {
-    setLocalAutoFill(checked);
-    await api.setAutoFill(room.id, myPlayerId, checked).catch(() => {
+    try {
+      setLocalAutoFill(checked);
+      const result = await api.setAutoFill(room.id, myPlayerId, checked);
+      console.log("Auto fill toggled:", result);
+      toast.success(checked ? `${t("globalAutoFill")} On` : `${t("globalAutoFill")} Off`);
+    } catch (error) {
+      console.error("Auto fill toggle error:", error);
       setLocalAutoFill((prev) => !prev);
-    });
+      toast.error(getErrorMessage(error));
+    }
   }
 
   async function handleMarkNumber(n: number) {

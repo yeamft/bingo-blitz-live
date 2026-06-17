@@ -75,7 +75,7 @@ const Index = () => {
       const { data: roomsData, error: roomsError } = await (supabase as any)
         .from("rooms")
         .select("*")
-        .in("status", ["lobby", "live"])
+        .eq("status", "lobby")
         .order("stake_amount", { ascending: true })
         .order("created_at", { ascending: true });
 
@@ -91,40 +91,42 @@ const Index = () => {
         STAKE_OPTIONS.includes(room.stake_amount as (typeof STAKE_OPTIONS)[number]),
       );
 
-      const roomIds = rooms.map((room) => room.id);
-      let counts: Record<string, number> = {};
+       const roomIds = rooms.map((room) => room.id);
+       let counts: Record<string, number> = {};
 
-      if (roomIds.length > 0) {
-        const { data: roomPlayersData, error: roomPlayersError } = await (supabase as any)
-          .from("room_players")
-          .select("room_id, role")
-          .in("room_id", roomIds);
+       if (roomIds.length > 0) {
+         const { data: roomPlayersData, error: roomPlayersError } = await (supabase as any)
+           .from("room_players")
+           .select("room_id, role")
+           .in("room_id", roomIds);
 
-        if (roomPlayersError) {
-          if (!cancelled) {
-            toast.error(roomPlayersError.message);
-            setLobbyReady(true);
-          }
-          return;
-        }
+         if (roomPlayersError) {
+           if (!cancelled) {
+             toast.error(roomPlayersError.message);
+             setLobbyReady(true);
+           }
+           return;
+         }
 
-        counts = (roomPlayersData ?? []).reduce((acc: Record<string, number>, row: { room_id: string; role: string }) => {
-          if (row.role === "player") acc[row.room_id] = (acc[row.room_id] ?? 0) + 1;
-          return acc;
-        }, {});
-      }
+         counts = (roomPlayersData ?? []).reduce((acc: Record<string, number>, row: { room_id: string; role: string }) => {
+           if (row.role === "player") acc[row.room_id] = (acc[row.room_id] ?? 0) + 1;
+           return acc;
+         }, {});
+       }
 
-      if (!cancelled) {
-        setLobbyRooms(rooms);
-        setPlayerCounts(counts);
-        setLobbyReady(true);
-      }
+       if (!cancelled) {
+         // Only show rooms with at least 1 player in lobby
+         const activeRooms = rooms.filter((room) => (counts[room.id] ?? 0) > 0);
+         setLobbyRooms(activeRooms);
+         setPlayerCounts(counts);
+         setLobbyReady(true);
+       }
     }
 
     loadLobbyRooms();
     const pollId = window.setInterval(() => {
       loadLobbyRooms();
-    }, 5000);
+    }, 2000);
 
     return () => {
       cancelled = true;
@@ -135,7 +137,7 @@ const Index = () => {
   const lobbyCards = useMemo<LobbyRoomCard[]>(() => {
     return STAKE_OPTIONS.map((stake) => {
       const roomsForStake = lobbyRooms.filter((room) => room.stake_amount === stake);
-      const openLobbyRooms = roomsForStake.filter((room) => room.status === "lobby");
+      const openLobbyRooms = roomsForStake.filter((room) => room.status === "lobby" && (playerCounts[room.id] ?? 0) > 0);
       const availableRoom = openLobbyRooms.find((room) => {
         const maxPlayers = room.max_players ?? DEFAULT_MAX_PLAYERS;
         return (playerCounts[room.id] ?? 0) < maxPlayers;
@@ -155,7 +157,11 @@ const Index = () => {
       let statusLabel = "Waiting for players";
       if (room?.status === "live") statusLabel = "Live";
       else if (room?.status === "paused") statusLabel = "Bingo under review";
-      else if (room?.status === "lobby") statusLabel = countdownSeconds === 0 ? "Starting now" : "Lobby open";
+      else if (room?.status === "lobby") {
+        if (countdownSeconds === 0) statusLabel = "Now";
+        else if (countdownSeconds && countdownSeconds <= 5) statusLabel = `${countdownSeconds}s`;
+        else statusLabel = "Lobby open";
+      }
 
       return {
         stake,
@@ -510,7 +516,7 @@ const Index = () => {
                     </div>
                     <div className="min-w-0 flex items-center justify-center gap-1 text-muted-foreground text-center">
                       <Clock3 className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{card.countdownSeconds !== null ? `${card.countdownSeconds}s` : "—"}</span>
+                      <span className="truncate">{card.countdownSeconds !== null ? (card.countdownSeconds === 0 ? "Now" : `${card.countdownSeconds}s`) : "—"}</span>
                     </div>
                     <Button
                       onClick={() => handleSelectGame(card)}
