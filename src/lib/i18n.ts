@@ -72,6 +72,26 @@ export const t = {
   globalDaubProgress: { en: "Global daub progress", am: "አጠቃላይ ሂደት" },
   toBingo: { en: "TO BINGO", am: "ወደ ቢንጎ" },
   cartela: { en: "Cartela", am: "ካርቴላ" },
+  gameEntry: { en: "Game Entry", am: "የጨዋታ መግቢያ" },
+  gameEntryHint: {
+    en: "Choose how you want to start playing.",
+    am: "ጨዋታውን እንዴት መጀመር እንደሚፈልጉ ይምረጡ።",
+  },
+  enterPublicLobby: { en: "Enter Public Lobby", am: "ወደ የህዝብ ሎቢ ይግቡ" },
+  createPrivateRoom: { en: "Create Private Room", am: "የግል ክፍል ይፍጠሩ" },
+  joinWithRoomCode: { en: "Join with Room Code", am: "በክፍል ኮድ ይግቡ" },
+  roomCodePlaceholder: { en: "ROOM CODE", am: "የክፍል ኮድ" },
+  privateRoomSetup: {
+    en: "Choose stake and cartelas for your private room.",
+    am: "ለየግል ክፍልዎ ገቢና ካርቴላ ይምረጡ።",
+  },
+  privateRoomStake: { en: "Private Room Stake", am: "የግል ክፍል ገቢ" },
+  selectedStakeHint: {
+    en: "Stake selected",
+    am: "የተመረጠ ገቢ",
+  },
+  back: { en: "Back", am: "ተመለስ" },
+  loadingSimple: { en: "Loading", am: "በመጫን ላይ" },
 };
 
 export function useLang() {
