@@ -150,6 +150,48 @@ export default function AdminPage() {
     }
   }
 
+  async function handleForceFinishRoom(roomId: string) {
+    if (!adminSession?.player) return;
+    setBusy(`force-finish-${roomId}`);
+    try {
+      await api.adminForceFinishRoom(adminSession.player.id, roomId);
+      toast.success("Room force finished");
+      await loadAdmin(true);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleAdvanceRoomRound(roomId: string) {
+    if (!adminSession?.player) return;
+    setBusy(`advance-${roomId}`);
+    try {
+      await api.adminAdvanceRoomRound(adminSession.player.id, roomId);
+      toast.success("Moved to next round");
+      await loadAdmin(true);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleResetRoomState(roomId: string) {
+    if (!adminSession?.player) return;
+    setBusy(`reset-${roomId}`);
+    try {
+      await api.adminResetRoomState(adminSession.player.id, roomId);
+      toast.success("Room state reset");
+      await loadAdmin(true);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleToggleAdmin(targetPlayerId: string, nextAdmin: boolean) {
     if (!adminSession?.player) return;
     setBusy(`admin-${targetPlayerId}`);
@@ -455,6 +497,7 @@ export default function AdminPage() {
                   <th className="px-3 py-3">Status</th>
                   <th className="px-3 py-3">Stake</th>
                   <th className="px-3 py-3">Pot</th>
+                  <th className="px-3 py-3">Winner</th>
                   <th className="px-3 py-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -467,14 +510,26 @@ export default function AdminPage() {
                     <td className="px-3 py-3 uppercase font-bold">{room.status}</td>
                     <td className="px-3 py-3">{room.stake_amount}</td>
                     <td className="px-3 py-3">{room.derash}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">{room.winning_line ?? "—"}</td>
                     <td className="px-3 py-3 text-right">
-                      {room.status !== "finished" && !room.closed_by_admin ? (
-                        <Button type="button" size="sm" variant="destructive" onClick={() => handleCloseRoom(room.id)} disabled={busy !== null}>
-                          {busy === `room-${room.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Close"}
+                      <div className="flex justify-end gap-2 flex-wrap">
+                        {room.status !== "finished" && !room.closed_by_admin && (
+                          <Button type="button" size="sm" variant="destructive" onClick={() => handleCloseRoom(room.id)} disabled={busy !== null}>
+                            {busy === `room-${room.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Close"}
+                          </Button>
+                        )}
+                        {room.status !== "finished" && (
+                          <Button type="button" size="sm" variant="secondary" onClick={() => handleForceFinishRoom(room.id)} disabled={busy !== null}>
+                            {busy === `force-finish-${room.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Force finish"}
+                          </Button>
+                        )}
+                        <Button type="button" size="sm" variant="secondary" onClick={() => handleAdvanceRoomRound(room.id)} disabled={busy !== null}>
+                          {busy === `advance-${room.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Next round"}
                         </Button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No action</span>
-                      )}
+                        <Button type="button" size="sm" variant="outline" onClick={() => handleResetRoomState(room.id)} disabled={busy !== null}>
+                          {busy === `reset-${room.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reset"}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
