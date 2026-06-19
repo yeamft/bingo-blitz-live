@@ -41,6 +41,7 @@ const SUPPORT_CONTACT = process.env.TELEGRAM_SUPPORT_CONTACT || process.env.SUPP
 const INVITE_URL = process.env.TELEGRAM_INVITE_URL || MINI_APP_URL || "";
 const LOGO_URL = process.env.TELEGRAM_BOT_LOGO_URL || process.env.YEGARA_BINGO_LOGO_URL || "";
 const PORT = Number(process.env.PORT || 3000);
+const sessionState = new Map();
 
 if (!TELEGRAM_BOT_TOKEN) {
   throw new Error("Missing TELEGRAM_BOT_TOKEN in environment.");
@@ -102,6 +103,31 @@ async function registerPlayer(messageOrUser) {
   return player;
 }
 
+async function getWalletSummary(player_id) {
+  return callGameAction("get_wallet_summary", { player_id });
+}
+
+function getSession(chatId) {
+  if (!sessionState.has(chatId)) {
+    sessionState.set(chatId, {
+      lastAction: "Opened bot",
+      lastVisitedAt: new Date().toISOString(),
+    });
+  }
+  return sessionState.get(chatId);
+}
+
+function updateSession(chatId, patch) {
+  const current = getSession(chatId);
+  const next = {
+    ...current,
+    ...patch,
+    lastVisitedAt: new Date().toISOString(),
+  };
+  sessionState.set(chatId, next);
+  return next;
+}
+
 function helpText() {
   return [
     "🎱 Yegara Bingo Bot",
@@ -118,10 +144,16 @@ function helpText() {
   ].join("\n");
 }
 
-function menuText(player) {
+function menuText(player, summary, session) {
   return [
-    `� Welcome ${player.username}!`,
+    `👋 Welcome ${player.username}!`,
     "Welcome to Yegara Bingo.",
+    "",
+    `🆔 Session: ${player.telegram_id}`,
+    `💼 Play wallet: ${summary.summary.play_wallet_balance}`,
+    `🏦 Main wallet: ${summary.summary.main_wallet_balance}`,
+    `🧮 Total balance: ${summary.summary.total_balance}`,
+    `🕒 Last action: ${session.lastAction}`,
     "",
     "Choose an option below:",
     "🎮 Play",
@@ -178,7 +210,7 @@ function mainMenuMarkup() {
 
 function balanceText(summary) {
   return [
-    `� ${summary.player.username}`,
+    `👤 ${summary.player.username}`,
     `💼 Play wallet: ${summary.summary.play_wallet_balance}`,
     `🏦 Main wallet: ${summary.summary.main_wallet_balance}`,
     `🧮 Total: ${summary.summary.total_balance}`,
@@ -186,7 +218,9 @@ function balanceText(summary) {
 }
 
 async function sendStart(chatId, player) {
-  const caption = `${menuText(player)}\n\n${helpText()}`;
+  const summary = await getWalletSummary(player.id);
+  const session = updateSession(chatId, { lastAction: "Opened main menu" });
+  const caption = `${menuText(player, summary, session)}\n\n${helpText()}`;
 
   if (LOGO_URL) {
     await telegram("sendPhoto", {
@@ -219,6 +253,7 @@ async function handleCommand(message) {
 
     if (command === "/register") {
       const player = await registerPlayer(message);
+      updateSession(chatId, { lastAction: "Registered account" });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: `✅ Registered as ${player.username}\nTelegram ID: ${player.telegram_id}`,
@@ -229,6 +264,7 @@ async function handleCommand(message) {
     if (command === "/balance") {
       const player = await registerPlayer(message);
       const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
+      updateSession(chatId, { lastAction: "Checked balance" });
       await telegram("sendMessage", { chat_id: chatId, text: balanceText(summary) });
       return;
     }
@@ -249,6 +285,7 @@ async function handleCommand(message) {
         amount,
         note,
       });
+      updateSession(chatId, { lastAction: `Deposit request: ${amount}` });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: `🧾 Deposit request submitted\nAmount: ${amount}\nStatus: ${result.request.status}`,
@@ -272,6 +309,7 @@ async function handleCommand(message) {
         amount,
         note,
       });
+      updateSession(chatId, { lastAction: `Withdrawal request: ${amount}` });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: `🏧 Withdrawal request submitted\nAmount: ${amount}\nStatus: ${result.request.status}`,
@@ -280,21 +318,25 @@ async function handleCommand(message) {
     }
 
     if (command === "/instructions") {
+      updateSession(chatId, { lastAction: "Viewed instructions" });
       await telegram("sendMessage", { chat_id: chatId, text: instructionsText(), reply_markup: mainMenuMarkup() });
       return;
     }
 
     if (command === "/support") {
+      updateSession(chatId, { lastAction: "Opened support info" });
       await telegram("sendMessage", { chat_id: chatId, text: supportText(), reply_markup: mainMenuMarkup() });
       return;
     }
 
     if (command === "/invite") {
+      updateSession(chatId, { lastAction: "Opened invite info" });
       await telegram("sendMessage", { chat_id: chatId, text: inviteText(), reply_markup: mainMenuMarkup() });
       return;
     }
 
     if (command === "/play") {
+      updateSession(chatId, { lastAction: "Opened play link" });
       if (!MINI_APP_URL) {
         await telegram("sendMessage", {
           chat_id: chatId,
@@ -329,15 +371,18 @@ async function handleCallbackQuery(callbackQuery) {
     if (callbackQuery.data === "balance") {
       const player = await registerPlayer(callbackQuery.from);
       const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
+      updateSession(chatId, { lastAction: "Checked balance" });
       await telegram("sendMessage", { chat_id: chatId, text: balanceText(summary) });
     } else if (callbackQuery.data === "register") {
       const player = await registerPlayer(callbackQuery.from);
+      updateSession(chatId, { lastAction: "Registered account" });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: `✅ Registered as ${player.username}\nTelegram ID: ${player.telegram_id}`,
         reply_markup: mainMenuMarkup(),
       });
     } else if (callbackQuery.data === "play") {
+      updateSession(chatId, { lastAction: "Opened play link" });
       if (!MINI_APP_URL) {
         await telegram("sendMessage", { chat_id: chatId, text: "Mini app URL is not configured yet." });
       } else {
@@ -348,22 +393,27 @@ async function handleCallbackQuery(callbackQuery) {
         });
       }
     } else if (callbackQuery.data === "deposit_help") {
+      updateSession(chatId, { lastAction: "Viewed deposit help" });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: "💵 To deposit, send: /deposit <amount> <note>\nExample: /deposit 100 CBE transfer",
         reply_markup: mainMenuMarkup(),
       });
     } else if (callbackQuery.data === "withdraw_help") {
+      updateSession(chatId, { lastAction: "Viewed withdrawal help" });
       await telegram("sendMessage", {
         chat_id: chatId,
         text: "🏧 To withdraw, send: /withdraw <amount> <note>\nExample: /withdraw 100 Telebirr",
         reply_markup: mainMenuMarkup(),
       });
     } else if (callbackQuery.data === "instructions") {
+      updateSession(chatId, { lastAction: "Viewed instructions" });
       await telegram("sendMessage", { chat_id: chatId, text: instructionsText(), reply_markup: mainMenuMarkup() });
     } else if (callbackQuery.data === "support") {
+      updateSession(chatId, { lastAction: "Opened support info" });
       await telegram("sendMessage", { chat_id: chatId, text: supportText(), reply_markup: mainMenuMarkup() });
     } else if (callbackQuery.data === "invite") {
+      updateSession(chatId, { lastAction: "Opened invite info" });
       await telegram("sendMessage", { chat_id: chatId, text: inviteText(), reply_markup: mainMenuMarkup() });
     }
   } catch (error) {
