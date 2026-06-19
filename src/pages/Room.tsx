@@ -133,6 +133,7 @@ function RoomInner({
   const isHost = room.host_id === myPlayerId;
   const [localAutoFill, setLocalAutoFill] = useState<boolean>(Boolean(me?.auto_fill ?? true));
   const [winnerModalOpen, setWinnerModalOpen] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const called = useMemo(
     () => room.call_sequence.slice(0, room.current_index + 1),
     [room.call_sequence, room.current_index],
@@ -334,6 +335,22 @@ function RoomInner({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={leaveConfirmOpen} onOpenChange={setLeaveConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("leave")}</DialogTitle>
+            <DialogDescription>You are about to leave this room. Your game participation will end immediately.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" onClick={() => setLeaveConfirmOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={async () => {
+              setLeaveConfirmOpen(false);
+              await handleLeave();
+            }}>Leave room</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <header className="glass rounded-2xl p-3 mt-2 mb-2 shadow-card">
         <div className="flex items-center justify-between mb-2.5">
@@ -354,7 +371,7 @@ function RoomInner({
           >
             {room.status === "lobby" && t("lobbyPhase")}
             {room.status === "live" && t("livePhase")}
-            {room.status === "paused" && t("pausedPhase")}
+            {room.status === "paused" && t("livePhase")}
             {room.status === "finished" && t("finished")}
           </span>
           <button
@@ -530,7 +547,7 @@ function RoomInner({
           variant="secondary"
           size="lg"
           className="h-12 font-bold"
-          onClick={handleLeave}
+          onClick={() => setLeaveConfirmOpen(true)}
         >
           <LogOut className="h-4 w-4 mr-1" /> {t("leave")}
         </Button>

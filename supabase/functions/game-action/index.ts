@@ -1004,12 +1004,51 @@ Deno.serve(async (req: Request) => {
         const { room_id, player_id } = args;
         if (!room_id || !player_id)
           return json({ error: "missing fields" }, 400);
-        // No refund once joined; that's the rule.
+        const room = await getRoomOrThrow(String(room_id));
+
+        await supabase
+          .from("room_cartela_reservations")
+          .delete()
+          .eq("room_id", room_id)
+          .eq("player_id", player_id);
+
         await supabase
           .from("room_players")
           .delete()
           .eq("room_id", room_id)
           .eq("player_id", player_id);
+
+        if (room.pending_winner_id === player_id) {
+          await supabase
+            .from("rooms")
+            .update({
+              status: "live",
+              pending_winner_id: null,
+              pending_winning_line: null,
+              pending_payout: null,
+            })
+            .eq("id", room_id);
+        }
+
+        const { count: remainingPlayers } = await supabase
+          .from("room_players")
+          .select("*", { count: "exact", head: true })
+          .eq("room_id", room_id)
+          .eq("role", "player");
+
+        if ((remainingPlayers ?? 0) < 1) {
+          await supabase
+            .from("rooms")
+            .update({
+              status: "finished",
+              pending_winner_id: null,
+              pending_winning_line: null,
+              pending_payout: null,
+              finished_at: new Date().toISOString(),
+            })
+            .eq("id", room_id);
+        }
+
         await audit(room_id, player_id, "leave_room", {});
         return json({ ok: true });
       }

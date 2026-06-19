@@ -607,9 +607,10 @@ const Index = () => {
                     </div>
                     <Button
                       onClick={() => handleSelectGame(card)}
-                      className="h-5 rounded-md gradient-primary text-primary-foreground font-black shadow-elegant text-[8px] px-2 min-w-0"
+                      disabled={Boolean(card.room && !card.joinableAsPlayer)}
+                      className="h-5 rounded-md gradient-primary text-primary-foreground font-black shadow-elegant text-[8px] px-2 min-w-0 disabled:pointer-events-none disabled:opacity-50"
                     >
-                      {card.room && !card.joinableAsPlayer ? "Watch" : "Join"}
+                      Join
                     </Button>
                   </div>
                 </div>
@@ -675,21 +676,29 @@ const Index = () => {
                 const takenByOtherUser = takenCartelas.includes(n);
                 const blocked = (!selected && selectedCartelas.length >= 3) || takenByOtherUser;
                 return (
-                  <button
-                    key={n}
-                    onClick={() => !blocked && toggleCartela(n)}
-                    className={`h-7 rounded-md text-[10px] font-bold border transition-smooth ${
-                      selected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : blocked
-                          ? "border-border bg-secondary/40 text-muted-foreground opacity-50 cursor-not-allowed"
-                          : "border-border bg-secondary text-foreground hover:border-primary/50"
-                    }`}
-                    disabled={blocked || (selectedRoomStatus && selectedRoomStatus !== "lobby" && !creatingPrivateRoom)}
-                    title={takenByOtherUser ? "Already selected by another player" : undefined}
-                  >
-                    {n}
-                  </button>
+                  <div key={n} className="relative">
+                    <button
+                      onClick={() => !blocked && toggleCartela(n)}
+                      className={`h-7 w-full rounded-md text-[10px] font-bold border transition-smooth ${
+                        selected
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : takenByOtherUser
+                            ? "border-warning/50 bg-warning/15 text-warning cursor-not-allowed"
+                            : blocked
+                              ? "border-border bg-secondary/40 text-muted-foreground opacity-50 cursor-not-allowed"
+                              : "border-border bg-secondary text-foreground hover:border-primary/50"
+                      }`}
+                      disabled={blocked || (selectedRoomStatus && selectedRoomStatus !== "lobby" && !creatingPrivateRoom)}
+                      title={takenByOtherUser ? "Reserved" : undefined}
+                    >
+                      {n}
+                    </button>
+                    {takenByOtherUser && !selected && (
+                      <span className="absolute -top-1 left-1/2 -translate-x-1/2 rounded bg-warning px-1 py-[1px] text-[7px] font-black uppercase text-warning-foreground shadow-sm">
+                        Reserved
+                      </span>
+                    )}
+                  </div>
                 );
               })}
             </div>
