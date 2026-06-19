@@ -1322,25 +1322,81 @@ Deno.serve(async (req: Request) => {
 
         const [
           { count: totalUsers },
+          { count: totalRooms },
           { count: activeRooms },
           { count: liveRooms },
+          { count: pausedRooms },
+          { count: closedRooms },
           { count: pendingWalletRequests },
           { data: rooms },
           { data: transactions },
           { data: requests },
           { data: users },
           { data: auditLogs },
+          { data: roomPlayers },
         ] = await Promise.all([
           supabase.from("players").select("*", { count: "exact", head: true }),
+          supabase.from("rooms").select("*", { count: "exact", head: true }),
           supabase.from("rooms").select("*", { count: "exact", head: true }).in("status", ["lobby", "live", "paused"]),
           supabase.from("rooms").select("*", { count: "exact", head: true }).eq("status", "live"),
+          supabase.from("rooms").select("*", { count: "exact", head: true }).eq("status", "paused"),
+          supabase.from("rooms").select("*", { count: "exact", head: true }).eq("closed_by_admin", true),
           supabase.from("wallet_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
-          supabase.from("rooms").select("*").order("created_at", { ascending: false }).limit(8),
+          supabase.from("rooms").select("*").order("created_at", { ascending: false }).limit(12),
           supabase.from("transactions").select("*").order("created_at", { ascending: false }).limit(12),
           supabase.from("wallet_requests").select("*").order("created_at", { ascending: false }).limit(12),
-          supabase.from("players").select("*").order("created_at", { ascending: false }).limit(20),
+          supabase.from("players").select("*").order("created_at", { ascending: false }).limit(30),
           supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(20),
+          supabase.from("room_players").select("*").order("joined_at", { ascending: false }).limit(500),
         ]);
+
+        const activePlayers = new Set(
+          (roomPlayers ?? [])
+            .filter((entry: { role?: string; stake_paid?: boolean }) => entry.role === "player" && entry.stake_paid)
+            .map((entry: { player_id: string }) => entry.player_id),
+        ).size;
+
+        const usersById = new Map((users ?? []).map((user: { id: string }) => [user.id, user]));
+        const roomPlayersByRoomId = new Map<string, Array<Record<string, unknown>>>();
+        for (const entry of roomPlayers ?? []) {
+          const roomId = String((entry as { room_id: string }).room_id);
+          const existing = roomPlayersByRoomId.get(roomId) ?? [];
+          existing.push(entry as unknown as Record<string, unknown>);
+          roomPlayersByRoomId.set(roomId, existing);
+        }
+
+        const enrichedRooms = (rooms ?? []).map((room: Record<string, unknown>) => {
+          const participants = roomPlayersByRoomId.get(String(room.id)) ?? [];
+          const joinedPlayers = participants.map((entry) => {
+            const linkedUser = usersById.get(String(entry.player_id)) as Record<string, unknown> | undefined;
+            const marked = Array.isArray(entry.marked) ? entry.marked : [];
+            return {
+              player_id: String(entry.player_id),
+              username: linkedUser?.username ? String(linkedUser.username) : null,
+              telegram_id: linkedUser?.telegram_id ? String(linkedUser.telegram_id) : null,
+              phone_number: linkedUser?.phone_number ? String(linkedUser.phone_number) : null,
+              role: String(entry.role ?? "player"),
+              selected_cartelas: Array.isArray(entry.selected_cartelas) ? entry.selected_cartelas : [],
+              false_claims: Number(entry.false_claims ?? 0),
+              marked_count: marked.length,
+            };
+          });
+          const playersOnly = joinedPlayers.filter((entry) => entry.role === "player");
+          const calledNumbers = Array.isArray(room.call_sequence)
+            ? room.call_sequence.slice(0, Number(room.current_index ?? -1) + 1)
+            : [];
+          const winnerUser = room.winner_id ? usersById.get(String(room.winner_id)) as Record<string, unknown> | undefined : undefined;
+          return {
+            ...room,
+            joined_players_count: joinedPlayers.length,
+            active_players_count: playersOnly.length,
+            watcher_count: joinedPlayers.filter((entry) => entry.role === "watcher").length,
+            called_numbers: calledNumbers,
+            last_called_number: calledNumbers.length ? calledNumbers[calledNumbers.length - 1] : null,
+            winner_name: winnerUser?.username ? String(winnerUser.username) : null,
+            joined_players: joinedPlayers,
+          };
+        });
 
         const totalRevenue = (transactions ?? [])
           .filter((tx: { kind: string }) => tx.kind === "stake")
@@ -1358,8 +1414,12 @@ Deno.serve(async (req: Request) => {
         return json({
           totals: {
             total_users: totalUsers ?? 0,
+            total_rooms: totalRooms ?? 0,
+            active_players: activePlayers,
             active_rooms: activeRooms ?? 0,
             live_rooms: liveRooms ?? 0,
+            paused_rooms: pausedRooms ?? 0,
+            closed_rooms: closedRooms ?? 0,
             pending_wallet_requests: pendingWalletRequests ?? 0,
             total_revenue: totalRevenue,
             total_payouts: totalPayouts,
@@ -1367,7 +1427,7 @@ Deno.serve(async (req: Request) => {
             total_withdrawals: totalWithdrawals,
             net_profit: totalRevenue - totalPayouts,
           },
-          rooms: rooms ?? [],
+          rooms: enrichedRooms,
           transactions: transactions ?? [],
           requests: requests ?? [],
           users: users ?? [],

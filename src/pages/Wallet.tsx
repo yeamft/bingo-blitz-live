@@ -3,8 +3,11 @@ import {
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
+  Building2,
+  CreditCard,
   Loader2,
   RefreshCw,
+  Smartphone,
   Wallet as WalletIcon,
   ShieldCheck,
 } from "lucide-react";
@@ -15,6 +18,29 @@ import { Textarea } from "@/components/ui/textarea";
 import { useLang } from "@/lib/i18n";
 import { api, getErrorMessage, Transaction, WalletRequest, type DepositProvider } from "@/lib/api";
 import { toast } from "sonner";
+
+const DEPOSIT_PROVIDER_OPTIONS: Array<{
+  value: DepositProvider;
+  label: string;
+  short: string;
+  icon: typeof Smartphone;
+}> = [
+  { value: "telebirr", label: "Telebirr", short: "TB", icon: Smartphone },
+  { value: "cbe", label: "CBE", short: "CBE", icon: Building2 },
+  { value: "dashen", label: "Dashen", short: "DB", icon: Building2 },
+  { value: "abyssinia", label: "Abyssinia", short: "BOA", icon: Building2 },
+  { value: "cbebirr", label: "CBE Birr", short: "Birr", icon: CreditCard },
+];
+
+const WITHDRAW_METHOD_OPTIONS: Array<{
+  value: "bank" | "telebirr" | "cbebirr";
+  label: string;
+  icon: typeof Smartphone;
+}> = [
+  { value: "bank", label: "Bank", icon: Building2 },
+  { value: "telebirr", label: "Telebirr", icon: Smartphone },
+  { value: "cbebirr", label: "CBE Birr", icon: CreditCard },
+];
 
 export default function WalletPage() {
   const { player, loading } = useTelegramIdentity();
@@ -231,22 +257,18 @@ export default function WalletPage() {
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowDownLeft className="h-4 w-4 text-primary" /> Deposit request
         </h2>
-        <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
-          {([
-            ["telebirr", "Telebirr"],
-            ["cbe", "CBE"],
-            ["dashen", "Dashen"],
-            ["abyssinia", "Abyssinia"],
-            ["cbebirr", "CBE Birr"],
-          ] as const).map(([value, label]) => (
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2">
+          {DEPOSIT_PROVIDER_OPTIONS.map(({ value, label, short, icon: Icon }) => (
             <Button
               key={value}
               type="button"
               variant={depositProvider === value ? "default" : "outline"}
-              className="h-9 sm:h-10 px-2 text-[11px] sm:text-sm"
+              className="h-14 sm:h-16 px-1.5 sm:px-2 flex flex-col gap-1 text-[10px] sm:text-xs"
               onClick={() => setDepositProvider(value)}
+              title={label}
             >
-              {label}
+              <Icon className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
+              <span className="leading-none font-semibold">{short}</span>
             </Button>
           ))}
         </div>
@@ -291,15 +313,16 @@ export default function WalletPage() {
           <ArrowUpRight className="h-4 w-4 text-primary" /> Withdrawal request
         </h2>
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
-          {(["bank", "telebirr", "cbebirr"] as const).map((method) => (
+          {WITHDRAW_METHOD_OPTIONS.map(({ value, label, icon: Icon }) => (
             <Button
-              key={method}
+              key={value}
               type="button"
-              variant={withdrawMethod === method ? "default" : "outline"}
-              className="h-9 sm:h-10 px-2 text-[11px] sm:text-sm"
-              onClick={() => setWithdrawMethod(method)}
+              variant={withdrawMethod === value ? "default" : "outline"}
+              className="h-12 sm:h-14 px-1.5 sm:px-2 flex flex-col gap-1 text-[10px] sm:text-xs"
+              onClick={() => setWithdrawMethod(value)}
             >
-              {method}
+              <Icon className="h-4 w-4" />
+              <span className="leading-none font-semibold">{label}</span>
             </Button>
           ))}
         </div>

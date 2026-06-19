@@ -48,8 +48,12 @@ export type DepositProvider = "telebirr" | "cbe" | "dashen" | "abyssinia" | "cbe
 export type AdminSummary = {
   totals: {
     total_users: number;
+    total_rooms?: number;
+    active_players?: number;
     active_rooms: number;
     live_rooms: number;
+    paused_rooms?: number;
+    closed_rooms?: number;
     pending_wallet_requests: number;
     total_revenue: number;
     total_payouts: number;
@@ -101,6 +105,22 @@ export type Room = {
   pending_winner_id?: string | null;
   pending_winning_line?: string | null;
   pending_payout?: number | null;
+  called_numbers?: number[];
+  last_called_number?: number | null;
+  joined_players_count?: number;
+  active_players_count?: number;
+  watcher_count?: number;
+  winner_name?: string | null;
+  joined_players?: Array<{
+    player_id: string;
+    username?: string | null;
+    telegram_id?: string | null;
+    phone_number?: string | null;
+    role: RoomPlayerRole;
+    selected_cartelas?: number[];
+    false_claims?: number;
+    marked_count?: number;
+  }>;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

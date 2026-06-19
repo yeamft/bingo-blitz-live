@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, Coins, Loader2, RefreshCw, Shield, Users, Wallet, XCircle } from "lucide-react";
+import { BarChart3, Coins, Loader2, Radio, RefreshCw, Shield, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
@@ -19,6 +19,9 @@ const ADMIN_SECTIONS: Array<{ id: AdminSection; label: string }> = [
 ];
 
 const ADMIN_SESSION_KEY = "yegara.admin.session";
+const DEMO_ADMIN_EMAIL = "admin@test.com";
+const DEMO_ADMIN_PASSWORD = "admin123";
+const DEMO_ADMIN_ID = "demo-admin";
 
 function emptyAdminSummary(): AdminSummary {
   return {
@@ -33,6 +36,145 @@ function emptyAdminSummary(): AdminSummary {
     rooms: [],
     transactions: [],
     requests: [],
+  };
+}
+
+function demoAdminSummary(): AdminSummary {
+  return {
+    totals: {
+      total_users: 248,
+      total_rooms: 36,
+      active_players: 91,
+      active_rooms: 7,
+      live_rooms: 3,
+      paused_rooms: 1,
+      closed_rooms: 4,
+      pending_wallet_requests: 6,
+      total_revenue: 18450,
+      total_payouts: 12780,
+      total_deposits: 22600,
+      total_withdrawals: 9350,
+      net_profit: 5670,
+    },
+    users: [
+      {
+        id: "u-1",
+        telegram_id: "556001",
+        username: "Betty",
+        phone_number: "251911111111",
+        wallet_balance: 900,
+        main_wallet_balance: 1400,
+        play_wallet_balance: 900,
+        is_admin: false,
+        is_blocked: false,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "u-2",
+        telegram_id: "556002",
+        username: "Nathan",
+        phone_number: "251922222222",
+        wallet_balance: 430,
+        main_wallet_balance: 800,
+        play_wallet_balance: 430,
+        is_admin: false,
+        is_blocked: true,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "u-3",
+        telegram_id: "556003",
+        username: "Selam",
+        phone_number: "251933333333",
+        wallet_balance: 1220,
+        main_wallet_balance: 1700,
+        play_wallet_balance: 1220,
+        is_admin: true,
+        is_blocked: false,
+        created_at: new Date().toISOString(),
+      },
+    ],
+    rooms: [
+      {
+        id: "r-1",
+        code: "AB12C",
+        game_id: "BB-20260619-AAA1",
+        room_name: "Evening 20 Br",
+        is_private: false,
+        host_id: "u-3",
+        status: "live",
+        stake_amount: 20,
+        house_commission_pct: 15,
+        derash: 920,
+        call_interval_ms: 3000,
+        lobby_seconds: 30,
+        lobby_ends_at: new Date().toISOString(),
+        current_index: 17,
+        call_sequence: Array.from({ length: 75 }, (_, i) => i + 1),
+        called_numbers: [4, 18, 22, 31, 45, 50, 61, 10, 27, 33, 54, 69, 2, 14, 29, 38, 57, 72],
+        last_called_number: 72,
+        winner_id: null,
+        winner_name: null,
+        winning_line: null,
+        joined_players_count: 12,
+        active_players_count: 10,
+        watcher_count: 2,
+        joined_players: [
+          { player_id: "u-1", username: "Betty", role: "player", selected_cartelas: [7, 19], false_claims: 0, marked_count: 8 },
+          { player_id: "u-2", username: "Nathan", role: "watcher", selected_cartelas: [], false_claims: 0, marked_count: 0 },
+          { player_id: "u-3", username: "Selam", role: "player", selected_cartelas: [3], false_claims: 0, marked_count: 9 },
+        ],
+        created_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
+        finished_at: null,
+      },
+      {
+        id: "r-2",
+        code: "ZX91Q",
+        game_id: "BB-20260619-BBB2",
+        room_name: "VIP Private",
+        is_private: true,
+        host_id: "u-3",
+        status: "paused",
+        stake_amount: 50,
+        house_commission_pct: 15,
+        derash: 600,
+        call_interval_ms: 3000,
+        lobby_seconds: 30,
+        lobby_ends_at: new Date().toISOString(),
+        current_index: 9,
+        call_sequence: Array.from({ length: 75 }, (_, i) => i + 1),
+        called_numbers: [5, 9, 16, 24, 32, 40, 44, 58, 63, 71],
+        last_called_number: 71,
+        winner_id: "u-1",
+        winner_name: "Betty",
+        winning_line: "Card 1 · Row 4",
+        joined_players_count: 6,
+        active_players_count: 6,
+        watcher_count: 0,
+        joined_players: [
+          { player_id: "u-1", username: "Betty", role: "player", selected_cartelas: [15], false_claims: 0, marked_count: 10 },
+          { player_id: "u-3", username: "Selam", role: "player", selected_cartelas: [9, 11], false_claims: 0, marked_count: 7 },
+        ],
+        created_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
+        finished_at: null,
+      },
+    ],
+    transactions: [
+      { id: 1, player_id: "u-1", room_id: "r-1", kind: "stake", amount: -40, balance_after: 900, created_at: new Date().toISOString() },
+      { id: 2, player_id: "u-3", room_id: "r-2", kind: "payout", amount: 510, balance_after: 1220, created_at: new Date().toISOString() },
+      { id: 3, player_id: "u-2", room_id: null, kind: "deposit", amount: 300, balance_after: 800, created_at: new Date().toISOString() },
+    ],
+    requests: [
+      { id: 101, player_id: "u-1", kind: "deposit", amount: 500, status: "pending", note: "provider=telebirr | reference=TB12345", created_at: new Date().toISOString() },
+      { id: 102, player_id: "u-2", kind: "withdrawal", amount: 200, status: "pending", note: "method=bank | account=CBE-00991", created_at: new Date().toISOString() },
+    ],
+    audit_logs: [
+      { id: 1001, room_id: null, player_id: "u-3", action: "admin_login", payload: {}, created_at: new Date().toISOString() },
+      { id: 1002, room_id: "r-1", player_id: "u-3", action: "admin_force_finish_room", payload: { previous_status: "live" }, created_at: new Date().toISOString() },
+      { id: 1003, room_id: null, player_id: "u-3", action: "wallet_request_approved", payload: { request_id: 101 }, created_at: new Date().toISOString() },
+    ],
   };
 }
 
@@ -60,6 +202,14 @@ export default function AdminPage() {
       setPageLoading(false);
       return;
     }
+
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      setSummary(demoAdminSummary());
+      setPageLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     if (showRefresh) setRefreshing(true);
     else setPageLoading(true);
 
@@ -97,6 +247,29 @@ export default function AdminPage() {
       toast.error("Enter admin email and password");
       return;
     }
+
+    if (loginEmail.trim().toLowerCase() === DEMO_ADMIN_EMAIL && loginPassword === DEMO_ADMIN_PASSWORD) {
+      const demoSession: AdminAuthSession = {
+        player: {
+          id: DEMO_ADMIN_ID,
+          telegram_id: DEMO_ADMIN_ID,
+          username: "Demo Admin",
+          wallet_balance: 0,
+          main_wallet_balance: 0,
+          play_wallet_balance: 0,
+          is_admin: true,
+          is_blocked: false,
+          created_at: new Date().toISOString(),
+        },
+      };
+      localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(demoSession));
+      setAdminSession(demoSession);
+      setSummary(demoAdminSummary());
+      setPageLoading(false);
+      toast.success("Demo admin login successful");
+      return;
+    }
+
     setPageLoading(true);
     try {
       const session = await api.adminLogin(loginEmail.trim(), loginPassword);
@@ -124,6 +297,10 @@ export default function AdminPage() {
 
   async function handleWalletRequest(requestId: number, approve: boolean) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Wallet actions are disabled in demo mode");
+      return;
+    }
     setBusy(`request-${requestId}`);
     try {
       await api.processWalletRequest(adminSession.player.id, requestId, approve);
@@ -138,6 +315,10 @@ export default function AdminPage() {
 
   async function handleCloseRoom(roomId: string) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Room actions are disabled in demo mode");
+      return;
+    }
     setBusy(`room-${roomId}`);
     try {
       await api.closeRoomAsAdmin(adminSession.player.id, roomId);
@@ -152,6 +333,10 @@ export default function AdminPage() {
 
   async function handleForceFinishRoom(roomId: string) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Room actions are disabled in demo mode");
+      return;
+    }
     setBusy(`force-finish-${roomId}`);
     try {
       await api.adminForceFinishRoom(adminSession.player.id, roomId);
@@ -166,6 +351,10 @@ export default function AdminPage() {
 
   async function handleAdvanceRoomRound(roomId: string) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Room actions are disabled in demo mode");
+      return;
+    }
     setBusy(`advance-${roomId}`);
     try {
       await api.adminAdvanceRoomRound(adminSession.player.id, roomId);
@@ -180,6 +369,10 @@ export default function AdminPage() {
 
   async function handleResetRoomState(roomId: string) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Room actions are disabled in demo mode");
+      return;
+    }
     setBusy(`reset-${roomId}`);
     try {
       await api.adminResetRoomState(adminSession.player.id, roomId);
@@ -194,6 +387,10 @@ export default function AdminPage() {
 
   async function handleToggleAdmin(targetPlayerId: string, nextAdmin: boolean) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("User admin changes are disabled in demo mode");
+      return;
+    }
     setBusy(`admin-${targetPlayerId}`);
     try {
       await api.adminSetUserAdmin(adminSession.player.id, targetPlayerId, nextAdmin);
@@ -208,6 +405,10 @@ export default function AdminPage() {
 
   async function handleToggleBlocked(targetPlayerId: string, nextBlocked: boolean) {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("User blocking is disabled in demo mode");
+      return;
+    }
     setBusy(`blocked-${targetPlayerId}`);
     try {
       await api.adminSetUserBlocked(adminSession.player.id, targetPlayerId, nextBlocked);
@@ -222,6 +423,10 @@ export default function AdminPage() {
 
   async function handleAdjustWallet(targetPlayerId: string, wallet: "main" | "play") {
     if (!adminSession?.player) return;
+    if (adminSession.player.id === DEMO_ADMIN_ID) {
+      toast.info("Wallet adjustment is disabled in demo mode");
+      return;
+    }
     const amount = Math.trunc(Number(adjustments[targetPlayerId]) || 0);
     if (amount === 0) {
       toast.error("Enter a positive or negative adjustment amount");
@@ -239,6 +444,15 @@ export default function AdminPage() {
       setBusy(null);
     }
   }
+
+  const users = summary?.users ?? [];
+  const filteredUsers = useMemo(() => users.filter((user) => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return true;
+    return user.username.toLowerCase().includes(q)
+      || user.telegram_id.toLowerCase().includes(q)
+      || (user.phone_number ?? "").toLowerCase().includes(q);
+  }), [users, userSearch]);
 
   if (loading || pageLoading) {
     return (
@@ -276,6 +490,9 @@ export default function AdminPage() {
             <p className="font-semibold text-foreground mb-1">Seeded admin credentials</p>
             <p>Email: admin@yegarabingo.com</p>
             <p>Password: admin12345</p>
+            <p className="mt-2 font-semibold text-foreground mb-1">Demo fallback credentials</p>
+            <p>Email: {DEMO_ADMIN_EMAIL}</p>
+            <p>Password: {DEMO_ADMIN_PASSWORD}</p>
           </div>
         </section>
       </main>
@@ -295,15 +512,6 @@ export default function AdminPage() {
       </main>
     );
   }
-
-  const users = summary.users ?? [];
-  const filteredUsers = useMemo(() => users.filter((user) => {
-    const q = userSearch.trim().toLowerCase();
-    if (!q) return true;
-    return user.username.toLowerCase().includes(q)
-      || user.telegram_id.toLowerCase().includes(q)
-      || (user.phone_number ?? "").toLowerCase().includes(q);
-  }), [users, userSearch]);
 
   return (
     <main className="min-h-screen w-full bg-background safe-top safe-bottom">
@@ -343,6 +551,11 @@ export default function AdminPage() {
               <p className="mt-1 text-sm text-muted-foreground">Manage users, wallets, rooms, reports, and audit activity.</p>
             </div>
             <div className="flex gap-2">
+              {adminSession.player.id === DEMO_ADMIN_ID && (
+                <span className="inline-flex items-center rounded-full bg-warning/15 px-3 py-2 text-xs font-bold text-warning">
+                  Demo Mode
+                </span>
+              )}
               <Button type="button" variant="secondary" onClick={() => loadAdmin(true)} disabled={refreshing}>
                 {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                 Refresh
@@ -362,8 +575,12 @@ export default function AdminPage() {
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <MetricCard icon={<Users className="h-4 w-4" />} label="Total Users" value={summary.totals.total_users} />
+          <MetricCard icon={<Users className="h-4 w-4" />} label="Active Players" value={summary.totals.active_players ?? 0} />
+          <MetricCard icon={<BarChart3 className="h-4 w-4" />} label="Total Rooms" value={summary.totals.total_rooms ?? 0} />
           <MetricCard icon={<BarChart3 className="h-4 w-4" />} label="Active Rooms" value={summary.totals.active_rooms} />
           <MetricCard icon={<Coins className="h-4 w-4" />} label="Live Rooms" value={summary.totals.live_rooms} />
+          <MetricCard icon={<Radio className="h-4 w-4" />} label="Paused Rooms" value={summary.totals.paused_rooms ?? 0} />
+          <MetricCard icon={<XCircle className="h-4 w-4" />} label="Closed Rooms" value={summary.totals.closed_rooms ?? 0} />
           <MetricCard icon={<Wallet className="h-4 w-4" />} label="Pending Requests" value={summary.totals.pending_wallet_requests} />
         </div>
 
@@ -483,12 +700,12 @@ export default function AdminPage() {
       </section>
 
       <section id="rooms" className={`glass scroll-mt-6 rounded-2xl p-5 shadow-card space-y-4 mb-4 xl:mb-0 ${activeSection === "rooms" ? "" : "hidden"}`}>
-        <h2 className="text-base font-bold">Recent Rooms</h2>
+        <h2 className="text-base font-bold">Recent Rooms & Live Games</h2>
         <div className="overflow-x-auto rounded-2xl border border-border bg-card/30">
           {summary.rooms.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">No rooms found.</p>
           ) : (
-            <table className="w-full min-w-[820px] text-sm">
+            <table className="w-full min-w-[1220px] text-sm">
               <thead className="bg-secondary/60 text-left text-[11px] uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="px-3 py-3">Room</th>
@@ -497,6 +714,11 @@ export default function AdminPage() {
                   <th className="px-3 py-3">Status</th>
                   <th className="px-3 py-3">Stake</th>
                   <th className="px-3 py-3">Pot</th>
+                  <th className="px-3 py-3">Players</th>
+                  <th className="px-3 py-3">Watchers</th>
+                  <th className="px-3 py-3">Called</th>
+                  <th className="px-3 py-3">Last No.</th>
+                  <th className="px-3 py-3">Cartelas</th>
                   <th className="px-3 py-3">Winner</th>
                   <th className="px-3 py-3 text-right">Actions</th>
                 </tr>
@@ -510,7 +732,21 @@ export default function AdminPage() {
                     <td className="px-3 py-3 uppercase font-bold">{room.status}</td>
                     <td className="px-3 py-3">{room.stake_amount}</td>
                     <td className="px-3 py-3">{room.derash}</td>
-                    <td className="px-3 py-3 text-xs text-muted-foreground">{room.winning_line ?? "—"}</td>
+                    <td className="px-3 py-3">{room.active_players_count ?? 0}/{room.joined_players_count ?? 0}</td>
+                    <td className="px-3 py-3">{room.watcher_count ?? 0}</td>
+                    <td className="px-3 py-3">{room.called_numbers?.length ?? 0}</td>
+                    <td className="px-3 py-3 font-bold">{room.last_called_number ?? "—"}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground max-w-[220px]">
+                      {room.joined_players?.length
+                        ? room.joined_players
+                            .filter((entry) => entry.selected_cartelas?.length)
+                            .map((entry) => `${entry.username ?? entry.player_id.slice(0, 6)}: ${entry.selected_cartelas?.join(",")}`)
+                            .join(" · ") || "—"
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">
+                      {room.winner_name ?? room.winning_line ?? "—"}
+                    </td>
                     <td className="px-3 py-3 text-right">
                       <div className="flex justify-end gap-2 flex-wrap">
                         {room.status !== "finished" && !room.closed_by_admin && (
