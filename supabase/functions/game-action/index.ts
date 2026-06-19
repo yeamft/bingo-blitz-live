@@ -517,6 +517,326 @@ async function getRoomOrThrow(room_id: string) {
   return room;
 }
 
+async function cleanupExpiredCartelaReservations(room_id: string) {
+  await supabase
+    .from("room_cartela_reservations")
+    .delete()
+    .eq("room_id", room_id)
+    .lt("expires_at", new Date().toISOString());
+}
+
+async function getSoldCartelasForRoom(room_id: string): Promise<number[]> {
+  const { data } = await supabase
+    .from("room_players")
+    .select("selected_cartelas, role")
+    .eq("room_id", room_id)
+    .eq("role", "player");
+
+  return [...new Set(
+    (data ?? [])
+      .flatMap((entry: { selected_cartelas?: number[] | null }) => normalizeCartelas(entry.selected_cartelas ?? [])),
+  )];
+}
+
+async function getActiveCartelaReservations(room_id: string) {
+  const { data } = await supabase
+    .from("room_cartela_reservations")
+    .select("*")
+    .eq("room_id", room_id)
+    .gte("expires_at", new Date().toISOString());
+
+  return data ?? [];
+}
+
+async function buildRoomCartelaMarket(room_id: string, player_id?: string) {
+  await cleanupExpiredCartelaReservations(room_id);
+  const sold = await getSoldCartelasForRoom(room_id);
+  const reservations = await getActiveCartelaReservations(room_id);
+  const soldSet = new Set(sold);
+  const reservedByCartela = new Map<number, { player_id: string; expires_at: string }>();
+  for (const reservation of reservations) {
+    reservedByCartela.set(Number((reservation as { cartela_number: number }).cartela_number), {
+      player_id: String((reservation as { player_id: string }).player_id),
+      expires_at: String((reservation as { expires_at: string }).expires_at),
+    });
+  }
+
+  const cartelas = Array.from({ length: 200 }, (_, i) => i + 1).map((cartelaNumber) => {
+    if (soldSet.has(cartelaNumber)) {
+      return { cartela_number: cartelaNumber, status: "sold" as const };
+    }
+    const reservation = reservedByCartela.get(cartelaNumber);
+    if (reservation) {
+      return {
+        cartela_number: cartelaNumber,
+        status: reservation.player_id === player_id ? "selected" as const : "reserved" as const,
+        reserved_by: reservation.player_id,
+        expires_at: reservation.expires_at,
+      };
+    }
+    return { cartela_number: cartelaNumber, status: "available" as const };
+  });
+
+  return {
+    sold_cartelas: sold,
+    reserved_cartelas: reservations,
+    cartelas,
+  };
+}
+
+async function reserveCartelasForPlayer(room_id: string, player_id: string, requestedCartelas: number[]) {
+  const room = await getRoomOrThrow(room_id);
+  if (room.status !== "lobby") throw new Error("Cartela market is closed");
+  if (room.lobby_ends_at && new Date(room.lobby_ends_at).getTime() <= Date.now()) {
+    throw new Error("Lobby already closed");
+  }
+
+  await cleanupExpiredCartelaReservations(room_id);
+  const cartelas = normalizeCartelas(requestedCartelas);
+  const soldSet = new Set(await getSoldCartelasForRoom(room_id));
+  const reservations = await getActiveCartelaReservations(room_id);
+  const reservedByOthers = new Set(
+    reservations
+      .filter((entry: { player_id: string }) => entry.player_id !== player_id)
+      .map((entry: { cartela_number: number }) => Number(entry.cartela_number)),
+  );
+
+  const unavailable = cartelas.filter((cartela) => soldSet.has(cartela) || reservedByOthers.has(cartela));
+  if (unavailable.length) {
+    throw new Error(`Cartelas unavailable: ${unavailable.join(", ")}`);
+  }
+
+  await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id).eq("player_id", player_id);
+  const expires_at = new Date(Date.now() + 60_000).toISOString();
+  if (cartelas.length) {
+    const payload = cartelas.map((cartela_number) => ({ room_id, player_id, cartela_number, expires_at }));
+    const { error } = await supabase.from("room_cartela_reservations").insert(payload);
+    if (error) throw new Error(error.message);
+  }
+
+  await audit(room_id, player_id, "reserve_cartelas", { cartelas, expires_at });
+  return { expires_at, cartelas };
+}
+
+async function confirmCartelaPurchase(room_id: string, player_id: string) {
+  const room = await getRoomOrThrow(room_id);
+  if (room.status !== "lobby") throw new Error("Cartela market is closed");
+  if (room.lobby_ends_at && new Date(room.lobby_ends_at).getTime() <= Date.now()) {
+    throw new Error("Lobby already closed");
+  }
+
+  await cleanupExpiredCartelaReservations(room_id);
+  const { data: reservations } = await supabase
+    .from("room_cartela_reservations")
+    .select("*")
+    .eq("room_id", room_id)
+    .eq("player_id", player_id)
+    .gte("expires_at", new Date().toISOString());
+
+  const cartelas = normalizeCartelas((reservations ?? []).map((entry: { cartela_number: number }) => entry.cartela_number));
+  if (!cartelas.length) throw new Error("No active cartela reservation found");
+
+  const soldSet = new Set(await getSoldCartelasForRoom(room_id));
+  const alreadySold = cartelas.filter((cartela) => soldSet.has(cartela));
+  if (alreadySold.length) throw new Error(`Cartelas already sold: ${alreadySold.join(", ")}`);
+
+  const { data: existing } = await supabase
+    .from("room_players")
+    .select("*")
+    .eq("room_id", room_id)
+    .eq("player_id", player_id)
+    .maybeSingle();
+
+  if (existing) {
+    await upgradeCartelasInLobby(room, existing, cartelas);
+  } else {
+    const totalStake = room.stake_amount * cartelas.length;
+    const playerWallet = normalizePlayerWallets(await getPlayerOrThrow(player_id));
+    if (playerWallet.play_wallet_balance < totalStake) throw new Error("Insufficient balance");
+
+    const newBal = playerWallet.play_wallet_balance - totalStake;
+    await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
+    await recordTx(player_id, room.id, "stake", -totalStake, newBal);
+    await supabase.from("rooms").update({ derash: room.derash + totalStake }).eq("id", room.id);
+    await supabase.from("room_players").insert({
+      room_id: room.id,
+      player_id,
+      role: "player",
+      stake_paid: true,
+      selected_cartelas: cartelas,
+      auto_fill: true,
+      false_claims: 0,
+      card: combineCards(cartelas),
+      marked: [FREE],
+    });
+    await audit(room.id, player_id, "purchase_cartelas", { cartelas, totalStake });
+  }
+
+  await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id).eq("player_id", player_id);
+  const refreshedRoom = await getRoomOrThrow(room_id);
+  return { room: refreshedRoom, cartelas };
+}
+
+async function cleanupExpiredCartelaReservations(room_id: string) {
+  await supabase
+    .from("room_cartela_reservations")
+    .delete()
+    .eq("room_id", room_id)
+    .lt("expires_at", new Date().toISOString());
+}
+
+async function getSoldCartelasForRoom(room_id: string): Promise<number[]> {
+  const { data } = await supabase
+    .from("room_players")
+    .select("selected_cartelas, role")
+    .eq("room_id", room_id)
+    .eq("role", "player");
+
+  return [...new Set(
+    (data ?? [])
+      .flatMap((entry: { selected_cartelas?: number[] | null }) => normalizeCartelas(entry.selected_cartelas ?? [])),
+  )];
+}
+
+async function getActiveCartelaReservations(room_id: string) {
+  const { data } = await supabase
+    .from("room_cartela_reservations")
+    .select("*")
+    .eq("room_id", room_id)
+    .gte("expires_at", new Date().toISOString());
+
+  return data ?? [];
+}
+
+async function buildRoomCartelaMarket(room_id: string, player_id?: string) {
+  await cleanupExpiredCartelaReservations(room_id);
+  const sold = await getSoldCartelasForRoom(room_id);
+  const reservations = await getActiveCartelaReservations(room_id);
+  const soldSet = new Set(sold);
+  const reservedByCartela = new Map<number, { player_id: string; expires_at: string }>();
+  for (const reservation of reservations) {
+    reservedByCartela.set(Number((reservation as { cartela_number: number }).cartela_number), {
+      player_id: String((reservation as { player_id: string }).player_id),
+      expires_at: String((reservation as { expires_at: string }).expires_at),
+    });
+  }
+
+  const cartelas = Array.from({ length: 200 }, (_, i) => i + 1).map((cartelaNumber) => {
+    if (soldSet.has(cartelaNumber)) {
+      return { cartela_number: cartelaNumber, status: "sold" as const };
+    }
+    const reservation = reservedByCartela.get(cartelaNumber);
+    if (reservation) {
+      return {
+        cartela_number: cartelaNumber,
+        status: reservation.player_id === player_id ? "selected" as const : "reserved" as const,
+        reserved_by: reservation.player_id,
+        expires_at: reservation.expires_at,
+      };
+    }
+    return { cartela_number: cartelaNumber, status: "available" as const };
+  });
+
+  return {
+    sold_cartelas: sold,
+    reserved_cartelas: reservations,
+    cartelas,
+  };
+}
+
+async function reserveCartelasForPlayer(room_id: string, player_id: string, requestedCartelas: number[]) {
+  const room = await getRoomOrThrow(room_id);
+  if (room.status !== "lobby") throw new Error("Cartela market is closed");
+  if (room.lobby_ends_at && new Date(room.lobby_ends_at).getTime() <= Date.now()) {
+    throw new Error("Lobby already closed");
+  }
+
+  await cleanupExpiredCartelaReservations(room_id);
+  const cartelas = normalizeCartelas(requestedCartelas);
+  const soldSet = new Set(await getSoldCartelasForRoom(room_id));
+  const reservations = await getActiveCartelaReservations(room_id);
+  const reservedByOthers = new Set(
+    reservations
+      .filter((entry: { player_id: string }) => entry.player_id !== player_id)
+      .map((entry: { cartela_number: number }) => Number(entry.cartela_number)),
+  );
+
+  const unavailable = cartelas.filter((cartela) => soldSet.has(cartela) || reservedByOthers.has(cartela));
+  if (unavailable.length) {
+    throw new Error(`Cartelas unavailable: ${unavailable.join(", ")}`);
+  }
+
+  await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id).eq("player_id", player_id);
+  const expires_at = new Date(Date.now() + 60_000).toISOString();
+  if (cartelas.length) {
+    const payload = cartelas.map((cartela_number) => ({ room_id, player_id, cartela_number, expires_at }));
+    const { error } = await supabase.from("room_cartela_reservations").insert(payload);
+    if (error) throw new Error(error.message);
+  }
+
+  await audit(room_id, player_id, "reserve_cartelas", { cartelas, expires_at });
+  return { expires_at, cartelas };
+}
+
+async function confirmCartelaPurchase(room_id: string, player_id: string) {
+  const room = await getRoomOrThrow(room_id);
+  if (room.status !== "lobby") throw new Error("Cartela market is closed");
+  if (room.lobby_ends_at && new Date(room.lobby_ends_at).getTime() <= Date.now()) {
+    throw new Error("Lobby already closed");
+  }
+
+  await cleanupExpiredCartelaReservations(room_id);
+  const { data: reservations } = await supabase
+    .from("room_cartela_reservations")
+    .select("*")
+    .eq("room_id", room_id)
+    .eq("player_id", player_id)
+    .gte("expires_at", new Date().toISOString());
+
+  const cartelas = normalizeCartelas((reservations ?? []).map((entry: { cartela_number: number }) => entry.cartela_number));
+  if (!cartelas.length) throw new Error("No active cartela reservation found");
+
+  const soldSet = new Set(await getSoldCartelasForRoom(room_id));
+  const alreadySold = cartelas.filter((cartela) => soldSet.has(cartela));
+  if (alreadySold.length) throw new Error(`Cartelas already sold: ${alreadySold.join(", ")}`);
+
+  const { data: existing } = await supabase
+    .from("room_players")
+    .select("*")
+    .eq("room_id", room_id)
+    .eq("player_id", player_id)
+    .maybeSingle();
+
+  if (existing) {
+    await upgradeCartelasInLobby(room, existing, cartelas);
+  } else {
+    const totalStake = room.stake_amount * cartelas.length;
+    const playerWallet = normalizePlayerWallets(await getPlayerOrThrow(player_id));
+    if (playerWallet.play_wallet_balance < totalStake) throw new Error("Insufficient balance");
+
+    const newBal = playerWallet.play_wallet_balance - totalStake;
+    await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
+    await recordTx(player_id, room.id, "stake", -totalStake, newBal);
+    await supabase.from("rooms").update({ derash: room.derash + totalStake }).eq("id", room.id);
+    await supabase.from("room_players").insert({
+      room_id: room.id,
+      player_id,
+      role: "player",
+      stake_paid: true,
+      selected_cartelas: cartelas,
+      auto_fill: true,
+      false_claims: 0,
+      card: combineCards(cartelas),
+      marked: [FREE],
+    });
+    await audit(room.id, player_id, "purchase_cartelas", { cartelas, totalStake });
+  }
+
+  await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id).eq("player_id", player_id);
+  const refreshedRoom = await getRoomOrThrow(room_id);
+  return { room: refreshedRoom, cartelas };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS")
     return new Response("ok", { headers: corsHeaders });
@@ -1313,6 +1633,51 @@ Deno.serve(async (req: Request) => {
         ]);
 
         return json({ transactions: transactions ?? [], requests: requests ?? [] });
+      }
+
+      case "get_room_cartela_market": {
+        const { room_id, player_id } = args;
+        if (!room_id) return json({ error: "missing room_id" }, 400);
+        const room = await getRoomOrThrow(String(room_id));
+        const market = await buildRoomCartelaMarket(String(room_id), player_id ? String(player_id) : undefined);
+        return json({ room, market });
+      }
+
+      case "reserve_cartelas": {
+        const { room_id, player_id, selected_cartelas } = args;
+        if (!room_id || !player_id) return json({ error: "missing fields" }, 400);
+        await ensurePlayerNotBlocked(String(player_id));
+        const reservation = await reserveCartelasForPlayer(String(room_id), String(player_id), selected_cartelas);
+        const market = await buildRoomCartelaMarket(String(room_id), String(player_id));
+        return json({ ok: true, reservation, market });
+      }
+
+      case "confirm_cartela_purchase": {
+        const { room_id, player_id } = args;
+        if (!room_id || !player_id) return json({ error: "missing fields" }, 400);
+        await ensurePlayerNotBlocked(String(player_id));
+        const result = await confirmCartelaPurchase(String(room_id), String(player_id));
+        const market = await buildRoomCartelaMarket(String(room_id), String(player_id));
+        return json({ ok: true, ...result, market });
+      }
+
+      case "release_cartela_reservation": {
+        const { room_id, player_id } = args;
+        if (!room_id || !player_id) return json({ error: "missing fields" }, 400);
+        await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id).eq("player_id", player_id);
+        await audit(String(room_id), String(player_id), "release_cartela_reservation", {});
+        const market = await buildRoomCartelaMarket(String(room_id), String(player_id));
+        return json({ ok: true, market });
+      }
+
+      case "admin_release_room_reservations": {
+        const { player_id, room_id } = args;
+        if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id);
+        await audit(String(room_id), admin.id, "admin_release_room_reservations", {});
+        const market = await buildRoomCartelaMarket(String(room_id));
+        return json({ ok: true, market });
       }
 
       case "get_admin_summary": {

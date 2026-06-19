@@ -157,8 +157,7 @@ const Index = () => {
                  }, {});
                }
              }
-             const activeRooms = refreshed.filter((room) => (refreshedCounts[room.id] ?? 0) > 0);
-             setLobbyRooms(activeRooms);
+              setLobbyRooms(refreshed);
              setPlayerCounts(refreshedCounts);
              setLobbyReady(true);
              return;
@@ -243,11 +242,7 @@ const Index = () => {
 
   function handleSelectGame(card: LobbyRoomCard) {
     if (card.room && !card.joinableAsPlayer) {
-      setSelectedStake(card.stake);
-      setSelectedRoomCode(card.room.code);
-      setSelectedRoomStatus(card.room.status ?? "live");
-      setCreatingPrivateRoom(false);
-      setStep("market");
+      navigate(`/room/${card.room.code}`);
       haptic("warning");
       return;
     }
@@ -276,6 +271,11 @@ const Index = () => {
 
       if (error) throw new Error(error.message);
       if (!data) throw new Error("Room not found");
+
+      if (data.status && data.status !== "lobby") {
+        navigate(`/room/${normalizedCode}`);
+        return;
+      }
 
       setSelectedStake(Number(data.stake_amount ?? 20));
       setSelectedRoomCode(normalizedCode);
@@ -606,17 +606,10 @@ const Index = () => {
                       <span className="truncate">{card.joinableAsPlayer && card.countdownSeconds !== null ? `Join ${card.countdownSeconds}s` : card.room ? "Closed" : "Open"}</span>
                     </div>
                     <Button
-                      onClick={() => {
-                        if (card.room && !card.joinableAsPlayer) {
-                          toast.error("Game already started");
-                          return;
-                        }
-                        handleSelectGame(card);
-                      }}
-                      disabled={Boolean(card.room && !card.joinableAsPlayer)}
+                      onClick={() => handleSelectGame(card)}
                       className="h-5 rounded-md gradient-primary text-primary-foreground font-black shadow-elegant text-[8px] px-2 min-w-0"
                     >
-                      Join
+                      {card.room && !card.joinableAsPlayer ? "Watch" : "Join"}
                     </Button>
                   </div>
                 </div>
@@ -734,8 +727,19 @@ const Index = () => {
           )}
 
           {selectedRoomStatus && selectedRoomStatus !== "lobby" && !creatingPrivateRoom && (
-            <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-2.5 mb-2 text-destructive font-semibold text-center">
-              Game already started — purchasing cards disabled
+            <div className="rounded-xl border border-warning/40 bg-warning/10 p-2.5 mb-2 text-warning font-semibold text-center space-y-2">
+              <p>Game already started — purchasing cards disabled</p>
+              {selectedRoomCode && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-8 text-[11px]"
+                  onClick={() => navigate(`/room/${selectedRoomCode}`)}
+                >
+                  Join as watcher
+                </Button>
+              )}
             </div>
           )}
 

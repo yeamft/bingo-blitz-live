@@ -50,11 +50,25 @@ export default function Room() {
     let cancelled = false;
     (async () => {
       try {
+        const { data: roomLookup, error: roomLookupError } = await (supabase as any)
+          .from("rooms")
+          .select("id, status")
+          .eq("code", code)
+          .maybeSingle();
+
+        if (roomLookupError) throw roomLookupError;
+        if (!roomLookup) throw new Error("Room not found");
+
+        if (roomLookup.status === "finished") {
+          if (!cancelled) setRoomId(roomLookup.id);
+          return;
+        }
+
         const sessionCartelas = readSessionCartelas(code);
         const { room } = await api.joinRoom(
           code,
           player.id,
-          sessionCartelas ?? undefined,
+          roomLookup.status === "lobby" ? (sessionCartelas ?? undefined) : [],
         );
         if (!cancelled) setRoomId(room.id);
       } catch (e: any) {
