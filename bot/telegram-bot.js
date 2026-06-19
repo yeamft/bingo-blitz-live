@@ -114,10 +114,18 @@ async function registerPlayerWithPhone(messageOrUser, phoneNumber) {
 
 async function findPlayerByTelegram(messageOrUser) {
   const identity = getTelegramIdentity(messageOrUser);
-  const { player } = await callGameAction("get_player_by_telegram", {
-    telegram_id: identity.telegram_id,
-  });
-  return player;
+  try {
+    const { player } = await callGameAction("get_player_by_telegram", {
+      telegram_id: identity.telegram_id,
+    });
+    return player;
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    if (message.includes("unknown action")) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function getWalletSummary(player_id) {
