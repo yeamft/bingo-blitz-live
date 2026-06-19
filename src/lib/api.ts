@@ -43,6 +43,8 @@ export type WalletRequest = {
   created_at: string;
 };
 
+export type DepositProvider = "telebirr" | "cbe" | "dashen" | "abyssinia" | "cbebirr";
+
 export type AdminSummary = {
   totals: {
     total_users: number;
@@ -341,7 +343,37 @@ export const api = {
   transferToPlayWallet: (player_id: string, amount: number) =>
     call<{ ok: true; player: Player }>("transfer_to_play_wallet", { player_id, amount }),
   requestDeposit: (player_id: string, amount: number, note?: string) =>
-    call<{ ok: true; request: WalletRequest }>("request_deposit", { player_id, amount, note }),
+    call<{
+      ok: true;
+      request: WalletRequest;
+      verified?: boolean;
+      summary?: { credited_amount: number };
+    }>("request_deposit", { player_id, amount, note }),
+  requestVerifiedDeposit: (
+    player_id: string,
+    amount: number,
+    payload: {
+      provider: DepositProvider;
+      reference: string;
+      account_suffix?: string;
+      phone_number?: string;
+      note?: string;
+    },
+  ) =>
+    call<{
+      ok: true;
+      request: WalletRequest;
+      verified?: boolean;
+      summary?: { credited_amount: number };
+    }>("request_deposit", {
+      player_id,
+      amount,
+      note: payload.note,
+      provider: payload.provider,
+      reference: payload.reference,
+      account_suffix: payload.account_suffix,
+      phone_number: payload.phone_number,
+    }),
   requestWithdrawal: (player_id: string, amount: number, note?: string) =>
     call<{ ok: true; request: WalletRequest }>("request_withdrawal", { player_id, amount, note }),
   listTransactions: (player_id: string) =>

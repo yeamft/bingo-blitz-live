@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useLang } from "@/lib/i18n";
-import { api, getErrorMessage, Transaction, WalletRequest } from "@/lib/api";
+import { api, getErrorMessage, Transaction, WalletRequest, type DepositProvider } from "@/lib/api";
 import { toast } from "sonner";
 
 export default function WalletPage() {
@@ -31,7 +31,13 @@ export default function WalletPage() {
   const [transferAmount, setTransferAmount] = useState("100");
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [depositProvider, setDepositProvider] = useState<DepositProvider>("telebirr");
+  const [depositReference, setDepositReference] = useState("");
+  const [depositAccountSuffix, setDepositAccountSuffix] = useState("");
+  const [depositPhoneNumber, setDepositPhoneNumber] = useState("");
   const [depositNote, setDepositNote] = useState("");
+  const [withdrawMethod, setWithdrawMethod] = useState("bank");
+  const [withdrawAccount, setWithdrawAccount] = useState("");
   const [withdrawNote, setWithdrawNote] = useState("");
   const [submitting, setSubmitting] = useState<null | "transfer" | "deposit" | "withdrawal">(null);
 
@@ -98,12 +104,30 @@ export default function WalletPage() {
     setSubmitting(kind);
     try {
       if (kind === "deposit") {
-        await api.requestDeposit(player.id, amount, note.trim() || undefined);
+        await api.requestVerifiedDeposit(player.id, amount, {
+          provider: depositProvider,
+          reference: depositReference.trim(),
+          account_suffix: depositAccountSuffix.trim() || undefined,
+          phone_number: depositPhoneNumber.trim() || undefined,
+          note: note.trim() || undefined,
+        });
         setDepositAmount("");
+        setDepositReference("");
+        setDepositAccountSuffix("");
+        setDepositPhoneNumber("");
         setDepositNote("");
       } else {
-        await api.requestWithdrawal(player.id, amount, note.trim() || undefined);
+        await api.requestWithdrawal(
+          player.id,
+          amount,
+          [
+            `method=${withdrawMethod}`,
+            withdrawAccount.trim() ? `account=${withdrawAccount.trim()}` : null,
+            note.trim() ? `note=${note.trim()}` : null,
+          ].filter(Boolean).join(" | "),
+        );
         setWithdrawAmount("");
+        setWithdrawAccount("");
         setWithdrawNote("");
       }
       toast.success(`${kind === "deposit" ? "Deposit" : "Withdrawal"} request submitted`);
@@ -136,8 +160,8 @@ export default function WalletPage() {
   const totalBalance = summary?.total_balance ?? mainBalance + playBalance;
 
   return (
-    <main className="min-h-screen max-w-md mx-auto px-5 py-6 safe-top">
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4 mb-4">
+    <main className="min-h-screen max-w-md mx-auto px-3 sm:px-5 py-4 sm:py-6 safe-top">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
         <h1 className="text-lg font-extrabold flex items-center gap-2">
           <WalletIcon className="h-5 w-5 text-warning" /> Wallet
         </h1>
@@ -151,41 +175,41 @@ export default function WalletPage() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl border border-border p-3 bg-card/40">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("playWallet")}</p>
             <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{playBalance}</p>
           </div>
-          <div className="rounded-xl border border-border p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("mainWallet")}</p>
             <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{mainBalance}</p>
           </div>
         </div>
 
-        <div className="rounded-xl border border-primary/30 bg-primary/10 p-3 flex items-start gap-2 text-xs">
+        <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 sm:p-3 flex items-start gap-2 text-[11px] sm:text-xs">
           <ShieldCheck className="h-4 w-4 mt-0.5 text-primary" />
           <p>
             {t("mainWallet")} holds your reserve. {t("playWallet")} is used for stakes and payouts.
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <div className="rounded-xl border border-border p-3 bg-card/40">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center">
+          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Pending Requests</p>
             <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{pendingRequests}</p>
           </div>
-          <div className="rounded-xl border border-border p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Transactions</p>
             <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{transactions.length}</p>
           </div>
-          <div className="rounded-xl border border-border p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Requests</p>
             <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{requests.length}</p>
           </div>
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4 mb-4">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowRightLeft className="h-4 w-4 text-primary" /> Move money to play wallet
         </h2>
@@ -203,10 +227,29 @@ export default function WalletPage() {
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4 mb-4">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowDownLeft className="h-4 w-4 text-primary" /> Deposit request
         </h2>
+        <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+          {([
+            ["telebirr", "Telebirr"],
+            ["cbe", "CBE"],
+            ["dashen", "Dashen"],
+            ["abyssinia", "Abyssinia"],
+            ["cbebirr", "CBE Birr"],
+          ] as const).map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              variant={depositProvider === value ? "default" : "outline"}
+              className="h-9 sm:h-10 px-2 text-[11px] sm:text-sm"
+              onClick={() => setDepositProvider(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
         <Input
           type="number"
           min="1"
@@ -214,20 +257,52 @@ export default function WalletPage() {
           value={depositAmount}
           onChange={(e) => setDepositAmount(e.target.value)}
         />
+        <Input
+          placeholder={depositProvider === "cbebirr" ? "Receipt number" : "Payment reference"}
+          value={depositReference}
+          onChange={(e) => setDepositReference(e.target.value)}
+        />
+        {(depositProvider === "cbe" || depositProvider === "abyssinia") && (
+          <Input
+            placeholder={depositProvider === "cbe" ? "Account suffix (8 digits for legacy CBE)" : "Suffix (5 digits)"}
+            value={depositAccountSuffix}
+            onChange={(e) => setDepositAccountSuffix(e.target.value)}
+          />
+        )}
+        {depositProvider === "cbebirr" && (
+          <Input
+            placeholder="Phone number (251...)"
+            value={depositPhoneNumber}
+            onChange={(e) => setDepositPhoneNumber(e.target.value)}
+          />
+        )}
         <Textarea
-          placeholder="Payment reference or note"
+          placeholder="Optional deposit note"
           value={depositNote}
           onChange={(e) => setDepositNote(e.target.value)}
         />
         <Button size="lg" className="h-11 font-bold w-full" onClick={() => handleRequest("deposit")} disabled={submitting !== null}>
-          {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit deposit request"}
+          {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and submit deposit"}
         </Button>
       </section>
 
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4 mb-4">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowUpRight className="h-4 w-4 text-primary" /> Withdrawal request
         </h2>
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+          {(["bank", "telebirr", "cbebirr"] as const).map((method) => (
+            <Button
+              key={method}
+              type="button"
+              variant={withdrawMethod === method ? "default" : "outline"}
+              className="h-9 sm:h-10 px-2 text-[11px] sm:text-sm"
+              onClick={() => setWithdrawMethod(method)}
+            >
+              {method}
+            </Button>
+          ))}
+        </div>
         <Input
           type="number"
           min="1"
@@ -235,8 +310,13 @@ export default function WalletPage() {
           value={withdrawAmount}
           onChange={(e) => setWithdrawAmount(e.target.value)}
         />
+        <Input
+          placeholder={withdrawMethod === "bank" ? "Bank account / holder details" : "Phone or payout account"}
+          value={withdrawAccount}
+          onChange={(e) => setWithdrawAccount(e.target.value)}
+        />
         <Textarea
-          placeholder="Bank, mobile money, or payout note"
+          placeholder="Withdrawal note / destination details"
           value={withdrawNote}
           onChange={(e) => setWithdrawNote(e.target.value)}
         />
@@ -251,7 +331,7 @@ export default function WalletPage() {
         </Button>
       </section>
 
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4 mb-4">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
         <div>
           <h2 className="text-base font-bold">Recent transactions</h2>
           <p className="text-xs text-muted-foreground mt-1">Stake, payout, transfer, and wallet activity.</p>
@@ -279,7 +359,7 @@ export default function WalletPage() {
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-5 shadow-card space-y-4">
+      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4">
         <div>
           <h2 className="text-base font-bold">Wallet requests</h2>
           <p className="text-xs text-muted-foreground mt-1">Pending and processed deposit/withdrawal requests.</p>

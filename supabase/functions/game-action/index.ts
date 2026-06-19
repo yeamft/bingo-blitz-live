@@ -20,6 +20,9 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+const VERIFIER_API_BASE_URL = Deno.env.get("VERIFIER_API_BASE_URL") || "https://verifyapi.leulzenebe.pro";
+const VERIFIER_API_KEY = Deno.env.get("VERIFIER_API_KEY") || "";
+
 const FREE = 0; // sentinel for the free center
 
 function mulberry32(seed: number) {
@@ -309,6 +312,84 @@ function json(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function parseMoneyValue(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  const cleaned = raw.replace(/[^\d.,-]/g, "").replace(/,/g, "").trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function verifyHostedDeposit(details: {
+  provider: string;
+  reference: string;
+  account_suffix?: string;
+  phone_number?: string;
+}) {
+  if (!VERIFIER_API_KEY) throw new Error("Verifier API key not configured");
+
+  const provider = details.provider.toLowerCase();
+  let endpoint = "/verify";
+  let body: Record<string, unknown> = { reference: details.reference };
+
+  switch (provider) {
+    case "telebirr":
+      endpoint = "/verify-telebirr";
+      break;
+    case "cbe":
+      endpoint = "/verify-cbe";
+      body = { reference: details.reference, accountSuffix: details.account_suffix };
+      break;
+    case "dashen":
+      endpoint = "/verify-dashen";
+      break;
+    case "abyssinia":
+      endpoint = "/verify-abyssinia";
+      body = { reference: details.reference, suffix: details.account_suffix };
+      break;
+    case "cbebirr":
+      endpoint = "/verify-cbebirr";
+      body = { receiptNumber: details.reference, phoneNumber: details.phone_number };
+      break;
+    default:
+      body = {
+        reference: details.reference,
+        suffix: details.account_suffix,
+        phoneNumber: details.phone_number,
+      };
+      break;
+  }
+
+  const response = await fetch(`${VERIFIER_API_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": VERIFIER_API_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error || `Verifier request failed (${response.status})`);
+  }
+
+  const data = payload?.data ?? payload;
+  const amount =
+    parseMoneyValue(data?.amount) ??
+    parseMoneyValue(data?.transactionAmount) ??
+    parseMoneyValue(data?.settledAmount) ??
+    parseMoneyValue(data?.totalPaidAmount) ??
+    parseMoneyValue(data?.total);
+
+  if (amount === null) {
+    throw new Error("Verifier response did not include a readable amount");
+  }
+
+  return { payload, amount };
 }
 
 function sanitizeRoomName(value: unknown, isPrivate: boolean) {
@@ -1134,26 +1215,65 @@ Deno.serve(async (req: Request) => {
       }
 
       case "request_deposit": {
-        const { player_id, amount, note } = args;
+        const { player_id, amount, note, provider, reference, account_suffix, phone_number } = args;
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid deposit request" }, 400);
 
         await ensurePlayerNotBlocked(String(player_id));
-        await getPlayerOrThrow(String(player_id));
+        const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
+
+        if (!provider || !reference) {
+          return json({ error: "provider and reference are required for deposit verification" }, 400);
+        }
+
+        const verification = await verifyHostedDeposit({
+          provider: String(provider),
+          reference: String(reference).trim(),
+          account_suffix: typeof account_suffix === "string" ? account_suffix.trim() : undefined,
+          phone_number: typeof phone_number === "string" ? phone_number.trim() : undefined,
+        });
+
+        const verifiedAmount = Math.trunc(Number(verification.amount) || 0);
+        if (verifiedAmount <= 0) {
+          return json({ error: "verified amount is invalid" }, 400);
+        }
+        if (verifiedAmount !== numericAmount) {
+          return json({ error: `verified amount ${verifiedAmount} does not match requested amount ${numericAmount}` }, 400);
+        }
+
+        const requestNote = [
+          `provider=${String(provider)}`,
+          `reference=${String(reference).trim()}`,
+          account_suffix ? `suffix=${String(account_suffix).trim()}` : null,
+          phone_number ? `phone=${String(phone_number).trim()}` : null,
+          note ? `note=${String(note).slice(0, 120)}` : null,
+        ].filter(Boolean).join(" | ");
+
         const { data: request, error } = await supabase
           .from("wallet_requests")
           .insert({
             player_id,
             kind: "deposit",
             amount: numericAmount,
-            note: typeof note === "string" ? note.slice(0, 240) : null,
+            status: "approved",
+            note: requestNote.slice(0, 240),
+            processed_at: new Date().toISOString(),
           })
           .select("*")
           .single();
         if (error) return json({ error: error.message }, 500);
 
-        await audit(null, String(player_id), "request_deposit", { amount: numericAmount, note });
-        return json({ ok: true, request });
+        const nextMain = player.main_wallet_balance + numericAmount;
+        await updatePlayerWallets(player.id, { main_wallet_balance: nextMain });
+        await recordTx(player.id, null, "deposit", numericAmount, nextMain);
+
+        await audit(null, String(player_id), "request_deposit_verified", {
+          amount: numericAmount,
+          provider,
+          reference,
+          verification: verification.payload,
+        });
+        return json({ ok: true, request, verified: true, summary: { credited_amount: numericAmount } });
       }
 
       case "request_withdrawal": {
