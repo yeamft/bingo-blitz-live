@@ -5,10 +5,12 @@ export type Player = {
   id: string;
   telegram_id: string;
   username: string;
+  phone_number?: string | null;
   wallet_balance: number;
   main_wallet_balance?: number;
   play_wallet_balance?: number;
   is_admin?: boolean;
+  is_blocked?: boolean;
   created_at: string;
 };
 
@@ -65,6 +67,10 @@ export type AdminSummary = {
     payload: unknown;
     created_at: string;
   }>;
+};
+
+export type AdminAuthSession = {
+  player: Player;
 };
 
 export type RoomStatus = "lobby" | "live" | "paused" | "finished";
@@ -351,6 +357,16 @@ export const api = {
     call<{ ok: true }>("admin_close_room", { player_id, room_id }),
   adminSetUserAdmin: (player_id: string, target_player_id: string, is_admin: boolean) =>
     call<{ ok: true; player: Player }>("admin_set_user_admin", { player_id, target_player_id, is_admin }),
+  adminSetUserBlocked: (player_id: string, target_player_id: string, is_blocked: boolean) =>
+    call<{ ok: true; player: Player }>("admin_set_user_blocked", { player_id, target_player_id, is_blocked }),
+  adminLogin: (email: string, password: string) =>
+    call<AdminAuthSession>("admin_login", { email, password }),
+  adminForceFinishRoom: (player_id: string, room_id: string) =>
+    call<{ ok: true }>("admin_force_finish_room", { player_id, room_id }),
+  adminResetRoomState: (player_id: string, room_id: string) =>
+    call<{ ok: true; room: Room }>("admin_reset_room_state", { player_id, room_id }),
+  adminAdvanceRoomRound: (player_id: string, room_id: string) =>
+    call<{ ok: true; room: Room }>("admin_advance_room_round", { player_id, room_id }),
   adminAdjustWallet: (
     player_id: string,
     target_player_id: string,

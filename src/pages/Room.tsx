@@ -7,6 +7,7 @@ import { useLang } from "@/lib/i18n";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { BingoCard } from "@/components/bingo/BingoCard";
 import { CompactBingoCard } from "@/components/bingo/CompactBingoCard";
 import { MasterBoard } from "@/components/bingo/MasterBoard";
@@ -117,7 +118,7 @@ function RoomInner({
   const { t, lang, toggle } = useLang();
   const isHost = room.host_id === myPlayerId;
   const [localAutoFill, setLocalAutoFill] = useState<boolean>(Boolean(me?.auto_fill ?? true));
-  const [verifying, setVerifying] = useState(false);
+  const [winnerModalOpen, setWinnerModalOpen] = useState(false);
   const called = useMemo(
     () => room.call_sequence.slice(0, room.current_index + 1),
     [room.call_sequence, room.current_index],
@@ -147,6 +148,17 @@ function RoomInner({
   const pendingWinnerCard = pendingWinnerCards[pendingWinningCardIndex] ?? pendingWinnerCards[0] ?? [];
   const finalPayout = getRoomPayout(room.derash, room.house_commission_pct);
   const displayPayout = room.pending_payout ?? finalPayout;
+
+  useEffect(() => {
+    if (room.status === "finished" && room.winner_id) {
+      setWinnerModalOpen(true);
+      const id = window.setTimeout(() => {
+        setWinnerModalOpen(false);
+        onJoinNextRound();
+      }, 4500);
+      return () => window.clearTimeout(id);
+    }
+  }, [room.status, room.winner_id, onJoinNextRound]);
 
   useEffect(() => {
     setLocalAutoFill(Boolean(me?.auto_fill ?? true));
@@ -257,10 +269,7 @@ function RoomInner({
   async function manualClaim() {
     try {
       const r = await api.claimBingo(room.id, myPlayerId);
-      if (r?.pending) {
-        toast.success(t("bingoUnderReview"));
-        haptic("success");
-      } else if (r?.winner) {
+      if (r?.winner) {
         toast.success(`${t("bingo")} +${r.payout}`);
         haptic("success");
       }
@@ -296,6 +305,20 @@ function RoomInner({
   return (
     <main className="min-h-screen flex flex-col safe-top safe-bottom max-w-md mx-auto px-3 pb-3">
       {iWon && room.status === "finished" && <Confetti />}
+      <Dialog open={winnerModalOpen} onOpenChange={setWinnerModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("winner")}</DialogTitle>
+            <DialogDescription>{t("joinNextRound")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p><span className="font-semibold">{t("winningPlayer")}:</span> {winner ? winner.player.username : t("noWinner")}</p>
+            <p><span className="font-semibold">{t("winnerBoard")}:</span> {`Card ${winningCardIndex + 1}`}</p>
+            <p><span className="font-semibold">{t("pattern")}:</span> {room.winning_line ?? "—"}</p>
+            <p><span className="font-semibold">{t("winningPayout")}:</span> {finalPayout}</p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Header */}
       <header className="glass rounded-2xl p-3 mt-2 mb-2 shadow-card">
@@ -351,71 +374,6 @@ function RoomInner({
             {" · "}
             {t("derash")}: <span className="font-bold text-warning">{room.derash}</span>
           </p>
-        </div>
-      )}
-
-      {room.status === "paused" && (
-        <div className="glass rounded-2xl p-4 mb-2 shadow-card space-y-4">
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">{t("verificationScreen")}</p>
-            <p className="text-sm font-bold mb-1">{t("bingoUnderReview")}</p>
-            <p className="text-xs text-muted-foreground">{t("claimPendingReview")}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {pendingWinnerRoomPlayer?.player?.username ?? "Player"} · {room.pending_winning_line}
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-center">
-            <Stat
-              icon={<Trophy className="h-3 w-3" />}
-              label={t("winningPlayer")}
-              value={pendingWinnerRoomPlayer?.player?.username ?? "—"}
-            />
-            <Stat
-              icon={<Coins className="h-3 w-3 text-warning" />}
-              label={t("winningPayout")}
-              value={String(displayPayout)}
-              highlight
-            />
-          </div>
-          {pendingWinnerCard.length > 0 && (
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 text-center">{t("winnerBoard")}</p>
-              <BingoCard numbers={pendingWinnerCard} marked={pendingWinnerRoomPlayer?.marked ?? []} current={null} disabled />
-            </div>
-          )}
-          {myCards.length > 0 && (
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 text-center">{t("yourSelectedCards")}</p>
-              <div className="grid grid-cols-2 gap-1.5">
-                {myCards.map((card, idx) => (
-                  <CompactBingoCard
-                    key={`paused-card-${idx}`}
-                    index={idx}
-                    numbers={card}
-                    marked={me?.marked ?? []}
-                    current={current}
-                    called={called}
-                    disabled
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="glass rounded-xl p-3 w-full">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 text-center">
-              {t("reviewCalledNumbers")}
-            </p>
-            <CallLog called={called} limit={10} />
-          </div>
-          {!isHost && (
-            <p className="text-xs text-center text-muted-foreground">{t("awaitingHostVerification")}</p>
-          )}
-          {isHost && (
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <Button disabled={verifying} onClick={async () => { setVerifying(true); try { await api.verifyBingo(room.id, myPlayerId, true); toast.success(t("approve")); } catch (e: any) { toast.error(e.message); } finally { setVerifying(false); } }}>{t("approve")}</Button>
-              <Button variant="destructive" disabled={verifying} onClick={async () => { setVerifying(true); try { await api.verifyBingo(room.id, myPlayerId, false); toast.warning(t("falseClaimPenalty")); } catch (e: any) { toast.error(e.message); } finally { setVerifying(false); } }}>{t("reject")}</Button>
-            </div>
-          )}
         </div>
       )}
 

@@ -417,6 +417,25 @@ async function requireAdmin(player_id: string) {
   return player;
 }
 
+async function ensurePlayerNotBlocked(player_id: string) {
+  const player = await getPlayerOrThrow(player_id);
+  if ((player as { is_blocked?: boolean }).is_blocked) {
+    throw new Error("Your account has been blocked");
+  }
+  return player;
+}
+
+async function getRoomOrThrow(room_id: string) {
+  const { data: room } = await supabase
+    .from("rooms")
+    .select("*")
+    .eq("id", room_id)
+    .maybeSingle();
+
+  if (!room) throw new Error("Room not found");
+  return room;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS")
     return new Response("ok", { headers: corsHeaders });
@@ -487,6 +506,7 @@ Deno.serve(async (req: Request) => {
       case "create_room": {
         const { player_id, stake_amount, selected_cartelas, is_private, room_name, max_players, password } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
+        await ensurePlayerNotBlocked(String(player_id));
         const privateRoom = Boolean(is_private);
         const stakePerCard = normalizeStake(privateRoom, stake_amount);
         const roomName = sanitizeRoomName(room_name, privateRoom);
@@ -604,6 +624,7 @@ Deno.serve(async (req: Request) => {
         const { code, player_id, selected_cartelas, password } = args;
         if (!code || !player_id)
           return json({ error: "missing fields" }, 400);
+        await ensurePlayerNotBlocked(String(player_id));
         const safeCode = String(code).toUpperCase().slice(0, 10);
         const cartelas = normalizeCartelas(selected_cartelas);
         const joinStake = (room: { stake_amount: number }) => room.stake_amount * cartelas.length;
@@ -896,24 +917,39 @@ Deno.serve(async (req: Request) => {
           return json({ ok: false, error: "No completed line", penalty });
         }
 
-        // Pause for host/community verification first.
         const payout = Math.floor(
           (room.derash * (100 - room.house_commission_pct)) / 100,
         );
+        const winnerId = player_id;
+        const { data: winner } = await supabase
+          .from("players")
+          .select("*")
+          .eq("id", winnerId)
+          .maybeSingle();
+        if (!winner) return json({ error: "Player vanished" }, 500);
+
+        const winnerWallet = normalizePlayerWallets(winner);
+        const newBal = winnerWallet.play_wallet_balance + payout;
+        await updatePlayerWallets(winnerId, { play_wallet_balance: newBal });
+        await recordTx(winnerId, room_id, "payout", payout, newBal);
+
         await supabase
           .from("rooms")
           .update({
-            status: "paused",
-            pending_winner_id: player_id,
-            pending_winning_line: win.name,
-            pending_payout: payout,
+            status: "finished",
+            winner_id: winnerId,
+            winning_line: win.name,
+            pending_winner_id: null,
+            pending_winning_line: null,
+            pending_payout: null,
+            finished_at: new Date().toISOString(),
           })
           .eq("id", room_id);
-        await audit(room_id, player_id, "claim_pending_verification", {
+        await audit(room_id, player_id, "claim_verified_immediate", {
           line: win.name,
           payout,
         });
-        return json({ ok: true, winner: false, pending: true, payout, line: win.name });
+        return json({ ok: true, winner: true, payout, line: win.name });
       }
 
       case "verify_bingo": {
@@ -1102,6 +1138,7 @@ Deno.serve(async (req: Request) => {
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid deposit request" }, 400);
 
+        await ensurePlayerNotBlocked(String(player_id));
         await getPlayerOrThrow(String(player_id));
         const { data: request, error } = await supabase
           .from("wallet_requests")
@@ -1124,6 +1161,7 @@ Deno.serve(async (req: Request) => {
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid withdrawal request" }, 400);
 
+        await ensurePlayerNotBlocked(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
         if (player.main_wallet_balance < numericAmount) {
           return json({ error: "Insufficient main wallet balance" }, 400);
@@ -1217,6 +1255,27 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      case "admin_login": {
+        const { email, password } = args;
+        const safeEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+        const safePassword = typeof password === "string" ? password : "";
+        if (!safeEmail || !safePassword) return json({ error: "missing credentials" }, 400);
+
+        const { data: player } = await supabase
+          .from("players")
+          .select("*")
+          .eq("admin_email", safeEmail)
+          .maybeSingle();
+        if (!player || !(player as { is_admin?: boolean }).is_admin) {
+          return json({ error: "Invalid credentials" }, 403);
+        }
+        if ((player as { admin_password?: string | null }).admin_password !== safePassword) {
+          return json({ error: "Invalid credentials" }, 403);
+        }
+        await audit(null, player.id, "admin_login", { email: safeEmail });
+        return json({ player: normalizePlayerWallets(player) });
+      }
+
       case "admin_set_user_admin": {
         const { player_id, target_player_id, is_admin } = args;
         if (!player_id || !target_player_id) return json({ error: "missing fields" }, 400);
@@ -1229,6 +1288,21 @@ Deno.serve(async (req: Request) => {
           .single();
         if (error) return json({ error: error.message }, 500);
         await audit(null, admin.id, "admin_set_user_admin", { target_player_id, is_admin: Boolean(is_admin) });
+        return json({ ok: true, player: normalizePlayerWallets(updated) });
+      }
+
+      case "admin_set_user_blocked": {
+        const { player_id, target_player_id, is_blocked } = args;
+        if (!player_id || !target_player_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        const { data: updated, error } = await supabase
+          .from("players")
+          .update({ is_blocked: Boolean(is_blocked) })
+          .eq("id", target_player_id)
+          .select("*")
+          .single();
+        if (error) return json({ error: error.message }, 500);
+        await audit(null, admin.id, "admin_set_user_blocked", { target_player_id, is_blocked: Boolean(is_blocked) });
         return json({ ok: true, player: normalizePlayerWallets(updated) });
       }
 
@@ -1327,6 +1401,90 @@ Deno.serve(async (req: Request) => {
           .eq("id", room_id);
         await audit(room_id, admin.id, "admin_close_room", { code: room.code, previous_status: room.status });
         return json({ ok: true });
+      }
+
+      case "admin_force_finish_room": {
+        const { player_id, room_id } = args;
+        if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        const room = await getRoomOrThrow(String(room_id));
+        await supabase
+          .from("rooms")
+          .update({
+            status: "finished",
+            pending_winner_id: null,
+            pending_winning_line: null,
+            pending_payout: null,
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", room_id);
+        await audit(room_id, admin.id, "admin_force_finish_room", { previous_status: room.status });
+        return json({ ok: true });
+      }
+
+      case "admin_reset_room_state": {
+        const { player_id, room_id } = args;
+        if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        const room = await getRoomOrThrow(String(room_id));
+        const lobbyEndsAt = new Date(Date.now() + Number(room.lobby_seconds || 30) * 1000).toISOString();
+        await supabase
+          .from("room_players")
+          .update({ marked: [FREE], false_claims: 0 })
+          .eq("room_id", room_id)
+          .eq("role", "player");
+        await supabase
+          .from("rooms")
+          .update({
+            status: "lobby",
+            current_index: -1,
+            winner_id: null,
+            winning_line: null,
+            pending_winner_id: null,
+            pending_winning_line: null,
+            pending_payout: null,
+            started_at: null,
+            finished_at: null,
+            lobby_ends_at: lobbyEndsAt,
+            call_sequence: shuffled1to75(),
+            closed_by_admin: false,
+          })
+          .eq("id", room_id);
+        const refreshed = await getRoomOrThrow(String(room_id));
+        await audit(room_id, admin.id, "admin_reset_room_state", { previous_status: room.status });
+        return json({ ok: true, room: refreshed });
+      }
+
+      case "admin_advance_room_round": {
+        const { player_id, room_id } = args;
+        if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
+        const admin = await requireAdmin(String(player_id));
+        const room = await getRoomOrThrow(String(room_id));
+        const lobbyEndsAt = new Date(Date.now() + Number(room.lobby_seconds || 30) * 1000).toISOString();
+        await supabase
+          .from("room_players")
+          .update({ marked: [FREE], false_claims: 0 })
+          .eq("room_id", room_id)
+          .eq("role", "player");
+        await supabase
+          .from("rooms")
+          .update({
+            status: "lobby",
+            current_index: -1,
+            winner_id: null,
+            winning_line: null,
+            pending_winner_id: null,
+            pending_winning_line: null,
+            pending_payout: null,
+            started_at: null,
+            finished_at: null,
+            lobby_ends_at: lobbyEndsAt,
+            call_sequence: shuffled1to75(),
+          })
+          .eq("id", room_id);
+        const refreshed = await getRoomOrThrow(String(room_id));
+        await audit(room_id, admin.id, "admin_advance_room_round", { previous_status: room.status });
+        return json({ ok: true, room: refreshed });
       }
 
       case "admin_clear_room_players": {

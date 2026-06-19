@@ -1,14 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Coins, Loader2, RefreshCw, Shield, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
-import { api, type AdminSummary, getErrorMessage } from "@/lib/api";
+import { api, type AdminAuthSession, type AdminSummary, getErrorMessage } from "@/lib/api";
 import { toast } from "sonner";
-
-const ADMIN_SESSION_KEY = "bingo.admin_test_session";
-const TEST_ADMIN_EMAIL = "admin@test.com";
-const TEST_ADMIN_PASSWORD = "admin123";
 
 type AdminSection = "overview" | "reports" | "users" | "rooms" | "transactions" | "wallet" | "audit";
 
@@ -22,9 +18,7 @@ const ADMIN_SECTIONS: Array<{ id: AdminSection; label: string }> = [
   { id: "audit", label: "Audit Logs" },
 ];
 
-function isAdminTestMode() {
-  return new URLSearchParams(window.location.search).get("test_admin") === "1" || localStorage.getItem(ADMIN_SESSION_KEY) === "1";
-}
+const ADMIN_SESSION_KEY = "yegara.admin.session";
 
 function emptyAdminSummary(): AdminSummary {
   return {
@@ -43,23 +37,26 @@ function emptyAdminSummary(): AdminSummary {
 }
 
 export default function AdminPage() {
-  const { player, loading } = useTelegramIdentity();
+  const { loading } = useTelegramIdentity();
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [adjustments, setAdjustments] = useState<Record<string, string>>({});
-  const [adminLoggedIn, setAdminLoggedIn] = useState(isAdminTestMode());
+  const [adminSession, setAdminSession] = useState<AdminAuthSession | null>(() => {
+    const raw = localStorage.getItem(ADMIN_SESSION_KEY);
+    return raw ? JSON.parse(raw) as AdminAuthSession : null;
+  });
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [activeSection, setActiveSection] = useState<AdminSection>(() => {
     const hash = window.location.hash.replace("#", "") as AdminSection;
     return ADMIN_SECTIONS.some((section) => section.id === hash) ? hash : "overview";
   });
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
 
   async function loadAdmin(showRefresh = false) {
-    if (!player || !adminLoggedIn) {
+    if (!adminSession?.player?.is_admin) {
       setPageLoading(false);
       return;
     }
@@ -67,14 +64,9 @@ export default function AdminPage() {
     else setPageLoading(true);
 
     try {
-      const result = await api.getAdminSummary(player.id);
+      const result = await api.getAdminSummary(adminSession.player.id);
       setSummary(result);
     } catch (error: unknown) {
-      if (isAdminTestMode()) {
-        setSummary(emptyAdminSummary());
-        toast.info("Admin test mode enabled");
-        return;
-      }
       toast.error(getErrorMessage(error));
       setSummary(null);
     } finally {
@@ -85,7 +77,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     loadAdmin();
-  }, [player?.id, adminLoggedIn]);
+  }, [adminSession?.player?.id, adminSession?.player?.is_admin]);
 
   useEffect(() => {
     function syncSectionFromHash() {
@@ -100,47 +92,41 @@ export default function AdminPage() {
     return () => window.removeEventListener("hashchange", syncSectionFromHash);
   }, []);
 
+  async function handleAdminLogin() {
+    if (!loginEmail.trim() || !loginPassword.trim()) {
+      toast.error("Enter admin email and password");
+      return;
+    }
+    setPageLoading(true);
+    try {
+      const session = await api.adminLogin(loginEmail.trim(), loginPassword);
+      localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+      setAdminSession(session);
+      toast.success("Admin login successful");
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setPageLoading(false);
+    }
+  }
+
   function navigateAdmin(section: AdminSection) {
     setActiveSection(section);
     window.history.replaceState(null, "", `/admin#${section}`);
   }
 
-  function handleAdminLogin() {
-    if (!loginEmail.trim() || !loginPassword.trim()) {
-      toast.error("Enter admin email and password");
-      return;
-    }
-
-    if (loginEmail.trim().toLowerCase() !== TEST_ADMIN_EMAIL || loginPassword !== TEST_ADMIN_PASSWORD) {
-      toast.error("Invalid test admin credentials");
-      return;
-    }
-
-    localStorage.setItem(ADMIN_SESSION_KEY, "1");
-    setAdminLoggedIn(true);
-    toast.success("Admin test login successful");
-  }
-
-  function handleTestLogin() {
-    setLoginEmail(TEST_ADMIN_EMAIL);
-    setLoginPassword(TEST_ADMIN_PASSWORD);
-    localStorage.setItem(ADMIN_SESSION_KEY, "1");
-    setAdminLoggedIn(true);
-    toast.success("Admin test login enabled");
-  }
-
   function handleLogout() {
     localStorage.removeItem(ADMIN_SESSION_KEY);
-    setAdminLoggedIn(false);
+    setAdminSession(null);
     setSummary(null);
     toast.success("Logged out");
   }
 
   async function handleWalletRequest(requestId: number, approve: boolean) {
-    if (!player) return;
+    if (!adminSession?.player) return;
     setBusy(`request-${requestId}`);
     try {
-      await api.processWalletRequest(player.id, requestId, approve);
+      await api.processWalletRequest(adminSession.player.id, requestId, approve);
       toast.success(approve ? "Wallet request approved" : "Wallet request rejected");
       await loadAdmin(true);
     } catch (error: unknown) {
@@ -151,10 +137,10 @@ export default function AdminPage() {
   }
 
   async function handleCloseRoom(roomId: string) {
-    if (!player) return;
+    if (!adminSession?.player) return;
     setBusy(`room-${roomId}`);
     try {
-      await api.closeRoomAsAdmin(player.id, roomId);
+      await api.closeRoomAsAdmin(adminSession.player.id, roomId);
       toast.success("Room closed");
       await loadAdmin(true);
     } catch (error: unknown) {
@@ -165,10 +151,10 @@ export default function AdminPage() {
   }
 
   async function handleToggleAdmin(targetPlayerId: string, nextAdmin: boolean) {
-    if (!player) return;
+    if (!adminSession?.player) return;
     setBusy(`admin-${targetPlayerId}`);
     try {
-      await api.adminSetUserAdmin(player.id, targetPlayerId, nextAdmin);
+      await api.adminSetUserAdmin(adminSession.player.id, targetPlayerId, nextAdmin);
       toast.success(nextAdmin ? "User promoted to admin" : "Admin access removed");
       await loadAdmin(true);
     } catch (error: unknown) {
@@ -178,8 +164,22 @@ export default function AdminPage() {
     }
   }
 
+  async function handleToggleBlocked(targetPlayerId: string, nextBlocked: boolean) {
+    if (!adminSession?.player) return;
+    setBusy(`blocked-${targetPlayerId}`);
+    try {
+      await api.adminSetUserBlocked(adminSession.player.id, targetPlayerId, nextBlocked);
+      toast.success(nextBlocked ? "User blocked" : "User unblocked");
+      await loadAdmin(true);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleAdjustWallet(targetPlayerId: string, wallet: "main" | "play") {
-    if (!player) return;
+    if (!adminSession?.player) return;
     const amount = Math.trunc(Number(adjustments[targetPlayerId]) || 0);
     if (amount === 0) {
       toast.error("Enter a positive or negative adjustment amount");
@@ -187,7 +187,7 @@ export default function AdminPage() {
     }
     setBusy(`wallet-${targetPlayerId}`);
     try {
-      await api.adminAdjustWallet(player.id, targetPlayerId, wallet, amount, "Admin dashboard adjustment");
+      await api.adminAdjustWallet(adminSession.player.id, targetPlayerId, wallet, amount, "Admin dashboard adjustment");
       toast.success("Wallet adjusted");
       setAdjustments((prev) => ({ ...prev, [targetPlayerId]: "" }));
       await loadAdmin(true);
@@ -206,23 +206,17 @@ export default function AdminPage() {
     );
   }
 
-  if (!adminLoggedIn) {
+  if (!adminSession) {
     return (
       <main className="min-h-screen w-full flex items-center justify-center px-5 py-8">
         <section className="glass rounded-3xl p-6 shadow-elegant w-full max-w-md space-y-5">
           <div className="text-center space-y-2">
             <Shield className="h-10 w-10 mx-auto text-primary" />
             <h1 className="text-2xl font-black">Admin Login</h1>
-            <p className="text-sm text-muted-foreground">Web admin dashboard access for testing and management.</p>
+            <p className="text-sm text-muted-foreground">Sign in with your admin credentials.</p>
           </div>
-
           <div className="space-y-3">
-            <Input
-              type="email"
-              placeholder="Admin email"
-              value={loginEmail}
-              onChange={(event) => setLoginEmail(event.target.value)}
-            />
+            <Input type="email" placeholder="Admin email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} />
             <Input
               type="password"
               placeholder="Password"
@@ -233,25 +227,20 @@ export default function AdminPage() {
               }}
             />
           </div>
-
           <Button type="button" size="lg" className="w-full font-bold" onClick={handleAdminLogin}>
             Login
           </Button>
-          <Button type="button" size="lg" variant="secondary" className="w-full font-bold" onClick={handleTestLogin}>
-            Continue as Test Admin
-          </Button>
-
           <div className="rounded-xl border border-border bg-card/40 p-3 text-xs text-muted-foreground">
-            <p className="font-semibold text-foreground mb-1">Testing credentials</p>
-            <p>Email: {TEST_ADMIN_EMAIL}</p>
-            <p>Password: {TEST_ADMIN_PASSWORD}</p>
+            <p className="font-semibold text-foreground mb-1">Seeded admin credentials</p>
+            <p>Email: admin@yegarabingo.com</p>
+            <p>Password: admin12345</p>
           </div>
         </section>
       </main>
     );
   }
 
-  if (!player || !summary) {
+  if (!adminSession.player?.is_admin || !summary) {
     return (
       <main className="min-h-screen w-full flex items-center justify-center px-5 py-8">
         <section className="glass rounded-3xl p-6 shadow-elegant space-y-3 text-center w-full max-w-md">
@@ -266,11 +255,13 @@ export default function AdminPage() {
   }
 
   const users = summary.users ?? [];
-  const filteredUsers = users.filter((user) => {
+  const filteredUsers = useMemo(() => users.filter((user) => {
     const q = userSearch.trim().toLowerCase();
     if (!q) return true;
-    return user.username.toLowerCase().includes(q) || user.telegram_id.toLowerCase().includes(q);
-  });
+    return user.username.toLowerCase().includes(q)
+      || user.telegram_id.toLowerCase().includes(q)
+      || (user.phone_number ?? "").toLowerCase().includes(q);
+  }), [users, userSearch]);
 
   return (
     <main className="min-h-screen w-full bg-background safe-top safe-bottom">
@@ -360,10 +351,10 @@ export default function AdminPage() {
       <section id="users" className={`glass scroll-mt-6 rounded-2xl p-5 shadow-card space-y-4 mb-4 xl:mb-0 ${activeSection === "users" ? "" : "hidden"}`}>
         <div>
           <h2 className="text-base font-bold">User Management</h2>
-          <p className="text-xs text-muted-foreground mt-1">Search users, promote admins, and adjust wallets.</p>
+          <p className="text-xs text-muted-foreground mt-1">Search users, promote admins, block accounts, and adjust wallets.</p>
         </div>
         <Input
-          placeholder="Search username or Telegram ID"
+          placeholder="Search username, Telegram ID, or phone"
           value={userSearch}
           onChange={(event) => setUserSearch(event.target.value)}
         />
@@ -376,9 +367,11 @@ export default function AdminPage() {
                 <tr>
                   <th className="px-3 py-3">User</th>
                   <th className="px-3 py-3">Telegram ID</th>
+                  <th className="px-3 py-3">Phone</th>
                   <th className="px-3 py-3">Main</th>
                   <th className="px-3 py-3">Play</th>
                   <th className="px-3 py-3">Role</th>
+                  <th className="px-3 py-3">Status</th>
                   <th className="px-3 py-3">Wallet Adjust</th>
                   <th className="px-3 py-3 text-right">Actions</th>
                 </tr>
@@ -388,11 +381,21 @@ export default function AdminPage() {
                   <tr key={user.id} className="align-middle">
                     <td className="px-3 py-3 font-semibold">{user.username}</td>
                     <td className="px-3 py-3 text-muted-foreground">{user.telegram_id}</td>
+                    <td className="px-3 py-3 text-muted-foreground">{user.phone_number ?? "—"}</td>
                     <td className="px-3 py-3 font-bold">{user.main_wallet_balance ?? user.wallet_balance}</td>
                     <td className="px-3 py-3 font-bold">{user.play_wallet_balance ?? user.wallet_balance}</td>
                     <td className="px-3 py-3">
                       <span className={`text-[10px] uppercase font-bold rounded-full px-2 py-1 ${user.is_admin ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground"}`}>
                         {user.is_admin ? "Admin" : "User"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span
+                        className={`text-[10px] uppercase font-bold rounded-full px-2 py-1 ${
+                          user.is_blocked ? "bg-destructive/15 text-destructive" : "bg-emerald-500/15 text-emerald-600"
+                        }`}
+                      >
+                        {user.is_blocked ? "Blocked" : "Active"}
                       </span>
                     </td>
                     <td className="px-3 py-3">
@@ -408,15 +411,26 @@ export default function AdminPage() {
                       </div>
                     </td>
                     <td className="px-3 py-3 text-right">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={user.is_admin ? "destructive" : "default"}
-                        onClick={() => handleToggleAdmin(user.id, !user.is_admin)}
-                        disabled={busy !== null || user.id === player.id}
-                      >
-                        {busy === `admin-${user.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : user.is_admin ? "Remove admin" : "Make admin"}
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={user.is_admin ? "destructive" : "default"}
+                          onClick={() => handleToggleAdmin(user.id, !user.is_admin)}
+                          disabled={busy !== null || user.id === adminSession.player.id}
+                        >
+                          {busy === `admin-${user.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : user.is_admin ? "Remove admin" : "Make admin"}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={user.is_blocked ? "secondary" : "destructive"}
+                          onClick={() => handleToggleBlocked(user.id, !user.is_blocked)}
+                          disabled={busy !== null || user.id === adminSession.player.id}
+                        >
+                          {busy === `blocked-${user.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : user.is_blocked ? "Unblock" : "Block"}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
