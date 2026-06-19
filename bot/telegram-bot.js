@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import express from "express";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +37,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOK
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || process.env.APP_URL || "";
+const PORT = Number(process.env.PORT || 3000);
 
 if (!TELEGRAM_BOT_TOKEN) {
   throw new Error("Missing TELEGRAM_BOT_TOKEN in environment.");
@@ -260,5 +262,30 @@ async function poll() {
   }
 }
 
+const app = express();
+
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "bingo-blitz-telegram-bot",
+    status: "running",
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    miniAppConfigured: Boolean(MINI_APP_URL),
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Telegram bot health server listening on port ${PORT}`);
+});
+
 console.log("Telegram bot is starting...");
-poll();
+poll().catch((error) => {
+  console.error("Telegram bot failed:", error);
+  process.exit(1);
+});
