@@ -37,9 +37,9 @@ export function MasterBoard({ called, current }: MasterBoardProps) {
   const recentPills = [...called].reverse().slice(0, 6);
 
   return (
-    <div className="flex gap-2 items-start">
+    <div className="space-y-2">
       {/* 15-column number grid */}
-      <div className="flex-1 min-w-0 flex gap-px">
+      <div className="min-w-0 flex gap-px">
         {ranges.map(([lo], letterIdx) => (
           <div key={letterIdx} className="flex-1 flex flex-col gap-px">
             <div
@@ -78,10 +78,10 @@ export function MasterBoard({ called, current }: MasterBoardProps) {
         ))}
       </div>
 
-      {/* Called balls — vertical stack, does not overlap grid */}
-      <div className="shrink-0 flex flex-col items-center gap-1 pt-5">
+      {/* Called balls — horizontal flex row below the board */}
+      <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
         {recentPills.length === 0 ? (
-          <span className="text-[8px] text-muted-foreground italic w-8 text-center">—</span>
+          <span className="text-[8px] text-muted-foreground italic text-center">—</span>
         ) : (
           recentPills.map((n, i) => {
             const letter = letterFor(n);
@@ -92,7 +92,7 @@ export function MasterBoard({ called, current }: MasterBoardProps) {
                 className={cn(
                   "rounded-full flex flex-col items-center justify-center text-white font-bold shadow-card",
                   letterBg[letter],
-                  isCurrent ? "h-9 w-9 text-[10px] ring-2 ring-warning" : i === 1 ? "h-5 w-5 text-[7px] opacity-80" : "h-7 w-7 text-[8px]",
+                  isCurrent ? "h-9 w-9 text-[10px] ring-2 ring-warning" : i > 2 ? "h-6 w-6 text-[7px] opacity-80" : "h-7 w-7 text-[8px]",
                 )}
               >
                 <span className="text-[7px] opacity-80 leading-none">{letter}</span>
