@@ -66,6 +66,9 @@ export default function WalletPage() {
   const [withdrawAccount, setWithdrawAccount] = useState("");
   const [withdrawNote, setWithdrawNote] = useState("");
   const [submitting, setSubmitting] = useState<null | "transfer" | "deposit" | "withdrawal">(null);
+  const [transactionPage, setTransactionPage] = useState(0);
+
+  const TRANSACTIONS_PER_PAGE = 4;
 
   async function loadWallet(showSpinner = false) {
     if (!player) return;
@@ -93,6 +96,13 @@ export default function WalletPage() {
     () => requests.filter((request) => request.status === "pending").length,
     [requests],
   );
+
+  const pagedTransactions = useMemo(
+    () => transactions.slice(transactionPage * TRANSACTIONS_PER_PAGE, (transactionPage + 1) * TRANSACTIONS_PER_PAGE),
+    [transactions, transactionPage],
+  );
+
+  const totalTransactionPages = Math.max(1, Math.ceil(transactions.length / TRANSACTIONS_PER_PAGE));
 
   async function handleTransfer() {
     if (!player) return;
@@ -142,6 +152,7 @@ export default function WalletPage() {
         setDepositAccountSuffix("");
         setDepositPhoneNumber("");
         setDepositNote("");
+        toast.success("Deposit verified and credited automatically");
       } else {
         await api.requestWithdrawal(
           player.id,
@@ -155,8 +166,8 @@ export default function WalletPage() {
         setWithdrawAmount("");
         setWithdrawAccount("");
         setWithdrawNote("");
+        toast.success("Withdrawal request submitted");
       }
-      toast.success(`${kind === "deposit" ? "Deposit" : "Withdrawal"} request submitted`);
       await loadWallet(true);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error));
@@ -186,15 +197,15 @@ export default function WalletPage() {
   const totalBalance = summary?.total_balance ?? mainBalance + playBalance;
 
   return (
-    <main className="min-h-screen max-w-md mx-auto px-3 sm:px-5 py-4 sm:py-6 safe-top">
-      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
+    <main className="min-h-screen max-w-md mx-auto px-2.5 sm:px-4 py-3 sm:py-5 safe-top">
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
         <h1 className="text-lg font-extrabold flex items-center gap-2">
           <WalletIcon className="h-5 w-5 text-warning" /> Wallet
         </h1>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm text-muted-foreground mt-2">Current total balance</p>
-            <p className="text-4xl font-black text-warning mt-1 tabular-nums">{totalBalance}</p>
+            <p className="text-xs text-muted-foreground mt-1">Current total balance</p>
+            <p className="text-3xl sm:text-4xl font-black text-warning mt-1 tabular-nums">{totalBalance}</p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => loadWallet(true)} disabled={refreshing}>
             {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -202,13 +213,13 @@ export default function WalletPage() {
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:gap-3">
-          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("playWallet")}</p>
-            <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{playBalance}</p>
+            <p className="font-extrabold text-lg sm:text-xl mt-1 tabular-nums text-foreground">{playBalance}</p>
           </div>
-          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("mainWallet")}</p>
-            <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{mainBalance}</p>
+            <p className="font-extrabold text-lg sm:text-xl mt-1 tabular-nums text-foreground">{mainBalance}</p>
           </div>
         </div>
 
@@ -219,23 +230,23 @@ export default function WalletPage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center">
-          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center">
+          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Pending Requests</p>
-            <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{pendingRequests}</p>
+            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{pendingRequests}</p>
           </div>
-          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Transactions</p>
-            <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{transactions.length}</p>
+            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{transactions.length}</p>
           </div>
-          <div className="rounded-xl border border-border p-2.5 sm:p-3 bg-card/40">
+          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Requests</p>
-            <p className="font-extrabold text-xl mt-1 tabular-nums text-foreground">{requests.length}</p>
+            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{requests.length}</p>
           </div>
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowRightLeft className="h-4 w-4 text-primary" /> Move money to play wallet
         </h2>
@@ -252,11 +263,18 @@ export default function WalletPage() {
           </Button>
         </div>
       </section>
-
-      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
-        <h2 className="text-base font-bold flex items-center gap-2">
-          <ArrowDownLeft className="h-4 w-4 text-primary" /> Deposit request
-        </h2>
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-bold flex items-center gap-2">
+            <ArrowDownLeft className="h-4 w-4 text-primary" /> Instant deposit verification
+          </h2>
+          <p className="text-[11px] sm:text-xs text-muted-foreground">
+            Submit your payment reference and the system will verify and credit your wallet automatically.
+          </p>
+        </div>
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-2.5 text-[11px] sm:text-xs text-muted-foreground">
+          Fill only the fields for your provider to keep it quick on mobile.
+        </div>
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2">
           {DEPOSIT_PROVIDER_OPTIONS.map(({ value, label, short, icon: Icon }) => (
             <Button
@@ -272,18 +290,20 @@ export default function WalletPage() {
             </Button>
           ))}
         </div>
-        <Input
-          type="number"
-          min="1"
-          placeholder="Deposit amount"
-          value={depositAmount}
-          onChange={(e) => setDepositAmount(e.target.value)}
-        />
-        <Input
-          placeholder={depositProvider === "cbebirr" ? "Receipt number" : "Payment reference"}
-          value={depositReference}
-          onChange={(e) => setDepositReference(e.target.value)}
-        />
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input
+            type="number"
+            min="1"
+            placeholder="Deposit amount"
+            value={depositAmount}
+            onChange={(e) => setDepositAmount(e.target.value)}
+          />
+          <Input
+            placeholder={depositProvider === "cbebirr" ? "Receipt number" : "Payment reference"}
+            value={depositReference}
+            onChange={(e) => setDepositReference(e.target.value)}
+          />
+        </div>
         {(depositProvider === "cbe" || depositProvider === "abyssinia") && (
           <Input
             placeholder={depositProvider === "cbe" ? "Account suffix (8 digits for legacy CBE)" : "Suffix (5 digits)"}
@@ -304,11 +324,11 @@ export default function WalletPage() {
           onChange={(e) => setDepositNote(e.target.value)}
         />
         <Button size="lg" className="h-11 font-bold w-full" onClick={() => handleRequest("deposit")} disabled={submitting !== null}>
-          {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and submit deposit"}
+          {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and credit wallet"}
         </Button>
       </section>
 
-      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
         <h2 className="text-base font-bold flex items-center gap-2">
           <ArrowUpRight className="h-4 w-4 text-primary" /> Withdrawal request
         </h2>
@@ -354,23 +374,50 @@ export default function WalletPage() {
         </Button>
       </section>
 
-      <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4 mb-3 sm:mb-4">
-        <div>
-          <h2 className="text-base font-bold">Recent transactions</h2>
-          <p className="text-xs text-muted-foreground mt-1">Stake, payout, transfer, and wallet activity.</p>
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm sm:text-base font-bold">Recent transactions</h2>
+            <p className="text-[11px] text-muted-foreground mt-0.5">Stake, payout, transfer, and wallet activity.</p>
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2"
+              disabled={transactionPage <= 0}
+              onClick={() => setTransactionPage((page) => Math.max(0, page - 1))}
+            >
+              Prev
+            </Button>
+            <span className="text-muted-foreground min-w-[44px] text-center">
+              {transactionPage + 1}/{totalTransactionPages}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2"
+              disabled={transactionPage >= totalTransactionPages - 1}
+              onClick={() => setTransactionPage((page) => Math.min(totalTransactionPages - 1, page + 1))}
+            >
+              Next
+            </Button>
+          </div>
         </div>
         <div className="space-y-2">
           {transactions.length === 0 ? (
             <p className="text-sm text-muted-foreground">No transactions yet.</p>
           ) : (
-            transactions.slice(0, 8).map((tx) => (
-              <div key={tx.id} className="rounded-xl border border-border p-3 bg-card/40 flex items-center justify-between gap-3">
+            pagedTransactions.map((tx) => (
+              <div key={tx.id} className="rounded-xl border border-border p-2.5 bg-card/40 flex items-center justify-between gap-2.5">
                 <div>
-                  <p className="text-sm font-semibold capitalize">{tx.kind.replace(/_/g, " ")}</p>
+                  <p className="text-[13px] font-semibold capitalize">{tx.kind.replace(/_/g, " ")}</p>
                   <p className="text-[11px] text-muted-foreground">{new Date(tx.created_at).toLocaleString()}</p>
                 </div>
                 <div className="text-right">
-                  <p className={`font-extrabold ${tx.amount >= 0 ? "text-primary" : "text-destructive"}`}>
+                  <p className={`text-sm font-extrabold ${tx.amount >= 0 ? "text-primary" : "text-destructive"}`}>
                     {tx.amount >= 0 ? "+" : ""}
                     {tx.amount}
                   </p>
