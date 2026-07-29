@@ -50,7 +50,7 @@ export default function Room() {
     let cancelled = false;
     (async () => {
       try {
-        const { data: roomLookup, error: roomLookupError } = await (supabase as any)
+        const { data: roomLookup, error: roomLookupError } = await supabase
           .from("rooms")
           .select("id, status")
           .eq("code", code)
@@ -71,8 +71,8 @@ export default function Room() {
           roomLookup.status === "lobby" ? (sessionCartelas ?? undefined) : [],
         );
         if (!cancelled) setRoomId(room.id);
-      } catch (e: any) {
-        if (!cancelled) setResolveErr(e.message);
+      } catch (error: unknown) {
+        if (!cancelled) setResolveErr(getErrorMessage(error));
       }
     })();
     return () => {
@@ -260,7 +260,7 @@ function RoomInner({
           autoClaimedRef.current = false;
         });
     }
-  }, [me?.marked, myCards, room.status, room.winner_id, localAutoFill]);
+  }, [me, isWatcher, myCards, room.id, room.status, room.winner_id, localAutoFill, myPlayerId, t]);
 
   // Winner haptic (when someone else won)
   useEffect(() => {
@@ -312,8 +312,8 @@ function RoomInner({
   }
 
   async function handleMarkNumber(n: number) {
-    await api.markNumber(room.id, myPlayerId, n).catch((e: any) => {
-      toast.error(e.message);
+    await api.markNumber(room.id, myPlayerId, n).catch((error: unknown) => {
+      toast.error(getErrorMessage(error));
     });
   }
 

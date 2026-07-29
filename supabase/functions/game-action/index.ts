@@ -20,8 +20,166 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-const VERIFIER_API_BASE_URL = Deno.env.get("VERIFIER_API_BASE_URL") || "https://verifyapi.leulzenebe.pro";
-const VERIFIER_API_KEY = Deno.env.get("VERIFIER_API_KEY") || "";
+const VERIFY_ET_BASE_URL = (
+  Deno.env.get("VERIFY_ET_BASE_URL") ||
+  Deno.env.get("VERIFIER_API_BASE_URL") ||
+  "https://verify.et"
+).replace(/\/$/, "");
+const VERIFY_ET_API_KEY =
+  Deno.env.get("VERIFY_ET_API_KEY") ||
+  Deno.env.get("VERIFIER_API_KEY") ||
+  "";
+const VERIFY_ET_SETTLEMENT_ACCOUNT = Deno.env.get("VERIFY_ET_SETTLEMENT_ACCOUNT") || "";
+const VERIFY_ET_WAIT_MS = Math.max(
+  1000,
+  Math.min(15000, Number(Deno.env.get("VERIFY_ET_WAIT_MS") || "8000") || 8000),
+);
+const WORKER_SECRET = Deno.env.get("WORKER_SECRET") || "";
+const SESSION_TTL_HOURS = 24;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 120;
+
+// ── Security helpers ──────────────────────────────────────────────────────────
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function hashPassword(password: string, salt?: string): Promise<string> {
+  const iterations = 100_000;
+  const saltBytes = salt
+    ? Uint8Array.from(atob(salt), (c) => c.charCodeAt(0))
+    : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" },
+    key,
+    256,
+  );
+  const saltB64 = btoa(String.fromCharCode(...saltBytes));
+  const hashB64 = btoa(String.fromCharCode(...new Uint8Array(bits)));
+  return `pbkdf2:${iterations}:${saltB64}:${hashB64}`;
+}
+
+async function verifyPassword(password: string, stored: string | null | undefined): Promise<boolean> {
+  if (!stored) return false;
+  // Legacy plaintext support — auto-migrated to hash on next login.
+  if (!stored.startsWith("pbkdf2:")) return stored === password;
+  const [, iterationsStr, saltB64, hashB64] = stored.split(":");
+  const iterations = Number(iterationsStr) || 100_000;
+  const saltBytes = Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" },
+    key,
+    256,
+  );
+  const computed = btoa(String.fromCharCode(...new Uint8Array(bits)));
+  return computed === hashB64;
+}
+
+async function createAdminSession(playerId: string, req: Request): Promise<string> {
+  const token = crypto.randomUUID() + crypto.randomUUID();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000).toISOString();
+  await supabase.from("admin_sessions").insert({
+    player_id: playerId,
+    token_hash: tokenHash,
+    expires_at: expiresAt,
+    ip_address: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    user_agent: req.headers.get("user-agent")?.slice(0, 256) ?? null,
+  });
+  return token;
+}
+
+async function resolveAdminFromSession(sessionToken: string | undefined): Promise<{ id: string; is_admin: boolean } | null> {
+  if (!sessionToken) return null;
+  const tokenHash = await sha256Hex(sessionToken);
+  const { data: session } = await supabase
+    .from("admin_sessions")
+    .select("player_id, expires_at")
+    .eq("token_hash", tokenHash)
+    .maybeSingle();
+  if (!session || new Date(session.expires_at) < new Date()) return null;
+  const { data: player } = await supabase
+    .from("players")
+    .select("id, is_admin")
+    .eq("id", session.player_id)
+    .maybeSingle();
+  if (!player?.is_admin) return null;
+  return player;
+}
+
+async function checkRateLimit(scope: string, identifier: string): Promise<void> {
+  const windowStart = new Date(Math.floor(Date.now() / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS).toISOString();
+  const { data: existing } = await supabase
+    .from("rate_limits")
+    .select("id, request_count")
+    .eq("scope", scope)
+    .eq("identifier", identifier)
+    .eq("window_start", windowStart)
+    .maybeSingle();
+  if (existing && existing.request_count >= RATE_LIMIT_MAX_REQUESTS) {
+    throw new Error("Rate limit exceeded. Please try again shortly.");
+  }
+  if (existing) {
+    await supabase.from("rate_limits").update({ request_count: existing.request_count + 1 }).eq("id", existing.id);
+  } else {
+    await supabase.from("rate_limits").insert({ scope, identifier, window_start: windowStart, request_count: 1 });
+  }
+}
+
+function requireWorkerSecret(args: Record<string, unknown>): void {
+  if (!WORKER_SECRET) return; // unset = open (dev only)
+  if (args.worker_secret !== WORKER_SECRET) throw new Error("Unauthorized worker");
+}
+
+function settingValueToString(value: unknown, fallback = ""): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.join(",");
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function parseSettingInput(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const trimmed = raw.trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  if (trimmed.startsWith("[") || trimmed.startsWith("{") || trimmed.startsWith('"')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // fall through
+    }
+  }
+  // Comma-separated numbers → JSON array (e.g. public_stakes)
+  if (/^-?\d+(\.\d+)?(\s*,\s*-?\d+(\.\d+)?)+$/.test(trimmed)) {
+    return trimmed.split(",").map((part) => Number(part.trim()));
+  }
+  return trimmed;
+}
+
+async function getSystemSetting(key: string, fallback = ""): Promise<string> {
+  const { data } = await supabase.from("system_settings").select("value").eq("key", key).maybeSingle();
+  return settingValueToString(data?.value, fallback);
+}
+
+async function isFeatureEnabled(key: string): Promise<boolean> {
+  const value = await getSystemSetting(key, "true");
+  return value !== "false" && value !== "0";
+}
 
 const FREE = 0; // sentinel for the free center
 
@@ -261,7 +419,7 @@ async function audit(
 async function recordTx(
   player_id: string,
   room_id: string | null,
-  kind: "stake" | "payout" | "refund" | "seed" | "deposit" | "withdrawal" | "transfer_to_play",
+  kind: "stake" | "payout" | "refund" | "seed" | "deposit" | "withdrawal" | "transfer_to_play" | "play_to_main" | "false_claim_penalty" | "admin_credit" | "admin_debit",
   amount: number,
   balance_after: number,
 ) {
@@ -323,70 +481,194 @@ function parseMoneyValue(raw: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mapProviderToVerifyEtBank(provider: string): string {
+  switch (provider.toLowerCase()) {
+    case "telebirr":
+      return "telebirr";
+    case "cbe":
+      return "cbe";
+    case "dashen":
+      return "dashen";
+    case "abyssinia":
+      return "boa";
+    case "cbebirr":
+      return "cbebirr";
+    default:
+      return provider.toLowerCase();
+  }
+}
+
+function buildVerifyEtRequestBody(details: {
+  provider: string;
+  reference: string;
+  account_suffix?: string;
+  phone_number?: string;
+}): Record<string, unknown> {
+  const bank = mapProviderToVerifyEtBank(details.provider);
+  const reference = details.reference.trim();
+  const body: Record<string, unknown> = { bank };
+
+  if (bank === "telebirr" || bank === "mpesa") {
+    body.transactionNumber = reference;
+  } else if (bank === "cbebirr") {
+    body.receiptNumber = reference;
+    if (details.phone_number) body.phoneNumber = details.phone_number;
+  } else if (bank === "cbe" || bank === "boa") {
+    body.referenceNumber = reference;
+    if (details.account_suffix) body.accountSuffix = details.account_suffix;
+  } else {
+    body.referenceNumber = reference;
+    if (details.account_suffix) body.accountSuffix = details.account_suffix;
+    if (details.phone_number) body.phoneNumber = details.phone_number;
+  }
+
+  if (VERIFY_ET_SETTLEMENT_ACCOUNT) {
+    body.settlementAccount = VERIFY_ET_SETTLEMENT_ACCOUNT;
+  }
+
+  return body;
+}
+
+function extractVerifiedAmount(payload: Record<string, unknown>): number | null {
+  const data = payload.data;
+  const items = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const amount =
+      parseMoneyValue(record.amount) ??
+      parseMoneyValue(record.transactionAmount) ??
+      parseMoneyValue(record.settledAmount) ??
+      parseMoneyValue(record.totalPaidAmount) ??
+      parseMoneyValue(record.total);
+    if (amount !== null) return amount;
+  }
+
+  const verification = payload.verification;
+  if (verification && typeof verification === "object") {
+    const amount = parseMoneyValue((verification as Record<string, unknown>).amount);
+    if (amount !== null) return amount;
+  }
+
+  return null;
+}
+
+function isVerifyEtTerminal(payload: Record<string, unknown>): boolean {
+  const processingStatus =
+    (payload.data as Record<string, unknown> | undefined)?.processingStatus ??
+    (payload.verification as Record<string, unknown> | undefined)?.processingStatus;
+  return processingStatus === "completed" || processingStatus === "failed";
+}
+
+function assertVerifyEtSuccess(payload: Record<string, unknown>) {
+  if (payload.success === false) {
+    throw new Error(String(payload.message || payload.error || "Verify.ET verification failed"));
+  }
+
+  const data = payload.data;
+  const items = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+  const result = items[0] as Record<string, unknown> | undefined;
+
+  if (result) {
+    if (result.verified === false || result.status === "failed") {
+      throw new Error(String(result.reason || payload.message || "Transaction could not be verified"));
+    }
+
+    const settlementMatch = result.settlementAccountMatch as Record<string, unknown> | undefined;
+    if (VERIFY_ET_SETTLEMENT_ACCOUNT && settlementMatch?.matched === false) {
+      throw new Error("Payment was verified but not sent to the expected settlement account");
+    }
+  } else {
+    const verification = payload.verification as Record<string, unknown> | undefined;
+    if (verification?.verified === false || verification?.status === "failed") {
+      throw new Error(String(payload.message || "Transaction could not be verified"));
+    }
+  }
+}
+
+async function pollVerifyEtStatus(statusPath: string, pollAfterMs = 1500): Promise<Record<string, unknown>> {
+  const statusUrl = statusPath.startsWith("http")
+    ? statusPath
+    : `${VERIFY_ET_BASE_URL}${statusPath.startsWith("/") ? statusPath : `/${statusPath}`}`;
+
+  let latest: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const response = await fetch(statusUrl, {
+      headers: { "x-api-key": VERIFY_ET_API_KEY },
+    });
+    latest = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(latest.message || latest.error || `Verify.ET status failed (${response.status})`);
+    }
+    if (isVerifyEtTerminal(latest)) return latest;
+    const waitMs = Number(
+      (latest.links as Record<string, unknown> | undefined)?.pollAfterMs ??
+        latest.pollAfterMs ??
+        pollAfterMs,
+    );
+    await sleep(Number.isFinite(waitMs) ? waitMs : pollAfterMs);
+  }
+
+  throw new Error("Verify.ET verification timed out before completion");
+}
+
 async function verifyHostedDeposit(details: {
   provider: string;
   reference: string;
   account_suffix?: string;
   phone_number?: string;
 }) {
-  if (!VERIFIER_API_KEY) throw new Error("Verifier API key not configured");
+  if (!VERIFY_ET_API_KEY) throw new Error("Verify.ET API key not configured");
 
-  const provider = details.provider.toLowerCase();
-  let endpoint = "/verify";
-  let body: Record<string, unknown> = { reference: details.reference };
+  const body = buildVerifyEtRequestBody(details);
+  const idempotencyKey = `bingo-${details.provider}-${details.reference}-${crypto.randomUUID()}`;
 
-  switch (provider) {
-    case "telebirr":
-      endpoint = "/verify-telebirr";
-      break;
-    case "cbe":
-      endpoint = "/verify-cbe";
-      body = { reference: details.reference, accountSuffix: details.account_suffix };
-      break;
-    case "dashen":
-      endpoint = "/verify-dashen";
-      break;
-    case "abyssinia":
-      endpoint = "/verify-abyssinia";
-      body = { reference: details.reference, suffix: details.account_suffix };
-      break;
-    case "cbebirr":
-      endpoint = "/verify-cbebirr";
-      body = { receiptNumber: details.reference, phoneNumber: details.phone_number };
-      break;
-    default:
-      body = {
-        reference: details.reference,
-        suffix: details.account_suffix,
-        phoneNumber: details.phone_number,
-      };
-      break;
-  }
-
-  const response = await fetch(`${VERIFIER_API_BASE_URL}${endpoint}`, {
+  const response = await fetch(`${VERIFY_ET_BASE_URL}/api/verify?waitMs=${VERIFY_ET_WAIT_MS}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": VERIFIER_API_KEY,
+      "x-api-key": VERIFY_ET_API_KEY,
+      "Idempotency-Key": idempotencyKey,
     },
     body: JSON.stringify(body),
   });
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || `Verifier request failed (${response.status})`);
+  let payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+
+  if (response.status === 202) {
+    const statusPath =
+      (payload.links as Record<string, unknown> | undefined)?.statusUrl ??
+      payload.statusUrl ??
+      (payload.requestId ? `/api/verify/${payload.requestId}` : null);
+    if (!statusPath) {
+      throw new Error("Verify.ET queued the request but did not return a status URL");
+    }
+    payload = await pollVerifyEtStatus(String(statusPath));
+  } else if (!response.ok) {
+    throw new Error(
+      String(payload.message || payload.error || `Verify.ET request failed (${response.status})`),
+    );
   }
 
-  const data = payload?.data ?? payload;
-  const amount =
-    parseMoneyValue(data?.amount) ??
-    parseMoneyValue(data?.transactionAmount) ??
-    parseMoneyValue(data?.settledAmount) ??
-    parseMoneyValue(data?.totalPaidAmount) ??
-    parseMoneyValue(data?.total);
+  assertVerifyEtSuccess(payload);
 
+  const amount = extractVerifiedAmount(payload);
   if (amount === null) {
-    throw new Error("Verifier response did not include a readable amount");
+    const verification = payload.verification as Record<string, unknown> | undefined;
+    const data = payload.data;
+    const item = Array.isArray(data) ? data[0] : data;
+    const verified =
+      (item as Record<string, unknown> | undefined)?.verified === true ||
+      verification?.verified === true;
+    if (verified) {
+      return { payload, amount: null };
+    }
+    throw new Error("Verify.ET response did not include a readable amount");
   }
 
   return { payload, amount };
@@ -400,9 +682,33 @@ function sanitizeRoomName(value: unknown, isPrivate: boolean) {
 
 function normalizeStake(isPrivate: boolean, stakeAmount: unknown) {
   const stake = Math.max(1, Math.min(500, Number(stakeAmount) || 20));
-  const allowed = isPrivate ? [10, 20, 50, 100] : [10, 20];
+  // Authoritative defaults aligned with system_settings / admin config.
+  // Public and private both allow the configured stake ladder.
+  const allowed = isPrivate ? [10, 20, 50, 100] : [10, 20, 50, 100, 500];
   if (!allowed.includes(stake)) throw new Error(`Invalid ${isPrivate ? "private" : "public"} stake`);
   return stake;
+}
+
+async function recordRoomEvent(
+  room_id: string,
+  event_type: string,
+  previous_status: string | null,
+  new_status: string | null,
+  user_id: string | null = null,
+  metadata: unknown = {},
+) {
+  try {
+    await supabase.from("room_events").insert({
+      room_id,
+      event_type,
+      previous_status,
+      new_status,
+      user_id,
+      metadata,
+    });
+  } catch {
+    // Table may not exist until migration is applied; do not break gameplay.
+  }
 }
 
 function normalizeMaxPlayers(raw: unknown, isPrivate: boolean) {
@@ -492,7 +798,9 @@ async function joinExistingPublicRoom(
   return refreshed ?? room;
 }
 
-async function requireAdmin(player_id: string) {
+async function requireAdmin(player_id: string, session_token?: string) {
+  const sessionAdmin = session_token ? await resolveAdminFromSession(String(session_token)) : null;
+  if (sessionAdmin) return normalizePlayerWallets(await getPlayerOrThrow(sessionAdmin.id));
   const player = normalizePlayerWallets(await getPlayerOrThrow(player_id));
   if (!(player as { is_admin?: boolean }).is_admin) throw new Error("Admin access required");
   return player;
@@ -683,6 +991,14 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { action, ...args } = await req.json();
+
+    // Global rate limit keyed by action + client IP.
+    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    try {
+      await checkRateLimit(`action:${action}`, clientIp);
+    } catch (rateError) {
+      return json({ error: rateError instanceof Error ? rateError.message : "Rate limit exceeded" }, 429);
+    }
 
     switch (action) {
       case "upsert_player": {
@@ -1413,6 +1729,156 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      case "transfer_to_main_wallet": {
+        const { player_id, amount } = args;
+        const numericAmount = Math.trunc(Number(amount) || 0);
+        if (!player_id || numericAmount <= 0) {
+          return json({ error: "invalid transfer", code: "INVALID_AMOUNT" }, 400);
+        }
+
+        await ensurePlayerNotBlocked(String(player_id));
+        const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
+        if (player.play_wallet_balance < numericAmount) {
+          return json({ error: "Insufficient play wallet balance", code: "INSUFFICIENT_BALANCE" }, 400);
+        }
+
+        const nextPlay = player.play_wallet_balance - numericAmount;
+        const nextMain = player.main_wallet_balance + numericAmount;
+        await updatePlayerWallets(player.id, {
+          main_wallet_balance: nextMain,
+          play_wallet_balance: nextPlay,
+        });
+        await recordTx(player.id, null, "play_to_main", numericAmount, nextMain);
+        await audit(null, player.id, "transfer_to_main_wallet", { amount: numericAmount });
+
+        return json({
+          ok: true,
+          player: {
+            ...player,
+            main_wallet_balance: nextMain,
+            play_wallet_balance: nextPlay,
+            wallet_balance: nextPlay,
+          },
+        });
+      }
+
+      case "worker_tick_rooms": {
+        // Server-side clock: expire lobbies and advance live calls.
+        // Invoke on a schedule (Supabase cron / external worker). Host browser must not be required.
+        try {
+          requireWorkerSecret(args);
+        } catch (workerError) {
+          return json({ error: workerError instanceof Error ? workerError.message : "Unauthorized" }, 403);
+        }
+        const now = Date.now();
+        const lockId = typeof args.worker_id === "string" ? args.worker_id : `worker-${crypto.randomUUID()}`;
+        const results: Array<Record<string, unknown>> = [];
+
+        const { data: lobbyRooms } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("status", "lobby")
+          .lte("lobby_ends_at", new Date(now).toISOString())
+          .limit(25);
+
+        for (const room of lobbyRooms ?? []) {
+          const { count } = await supabase
+            .from("room_players")
+            .select("*", { count: "exact", head: true })
+            .eq("room_id", room.id)
+            .eq("role", "player");
+
+          if (!count || count < 1) {
+            await supabase
+              .from("rooms")
+              .update({ status: "finished", finished_at: new Date().toISOString() })
+              .eq("id", room.id);
+            await recordRoomEvent(room.id, "lobby_expired_empty", "lobby", "finished", null, { lockId });
+            results.push({ room_id: room.id, action: "finished_empty" });
+            continue;
+          }
+
+          const interval = Number(room.call_interval_ms || 3000);
+          await supabase
+            .from("rooms")
+            .update({
+              status: "live",
+              started_at: new Date().toISOString(),
+              current_index: -1,
+              next_call_at: new Date(now + interval).toISOString(),
+              worker_lock_id: lockId,
+              worker_lock_expires_at: new Date(now + 15_000).toISOString(),
+            })
+            .eq("id", room.id);
+          await recordRoomEvent(room.id, "lobby_to_live", "lobby", "live", null, { players: count, lockId });
+          results.push({ room_id: room.id, action: "started" });
+        }
+
+        const { data: liveRooms } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("status", "live")
+          .or(`next_call_at.is.null,next_call_at.lte.${new Date(now).toISOString()}`)
+          .limit(25);
+
+        for (const room of liveRooms ?? []) {
+          const next = Number(room.current_index ?? -1) + 1;
+          const sequence = Array.isArray(room.call_sequence) ? room.call_sequence : [];
+          if (next >= sequence.length) {
+            await supabase
+              .from("rooms")
+              .update({ status: "finished", finished_at: new Date().toISOString(), next_call_at: null })
+              .eq("id", room.id);
+            await recordRoomEvent(room.id, "finished_no_winner", "live", "finished", null, { lockId });
+            results.push({ room_id: room.id, action: "finished_no_winner" });
+            continue;
+          }
+
+          const number = sequence[next];
+          const interval = Number(room.call_interval_ms || 3000);
+          await supabase
+            .from("rooms")
+            .update({
+              current_index: next,
+              last_call_at: new Date(now).toISOString(),
+              next_call_at: new Date(now + interval).toISOString(),
+              worker_lock_id: lockId,
+              worker_lock_expires_at: new Date(now + 15_000).toISOString(),
+            })
+            .eq("id", room.id);
+
+          try {
+            await supabase.from("called_numbers").insert({
+              room_id: room.id,
+              number,
+              sequence_index: next,
+              created_by: lockId,
+            });
+          } catch {
+            // unique conflict = already called
+          }
+
+          const { data: rps } = await supabase
+            .from("room_players")
+            .select("*")
+            .eq("room_id", room.id)
+            .eq("role", "player");
+          for (const rp of rps ?? []) {
+            if (!rp.auto_fill) continue;
+            if (Array.isArray(rp.card) && rp.card.includes(number) && !(rp.marked ?? []).includes(number)) {
+              await supabase
+                .from("room_players")
+                .update({ marked: [...(rp.marked ?? []), number] })
+                .eq("id", rp.id);
+            }
+          }
+
+          results.push({ room_id: room.id, action: "called", number, index: next });
+        }
+
+        return json({ ok: true, worker_id: lockId, results });
+      }
+
       case "request_deposit": {
         const { player_id, amount, note, provider, reference, account_suffix, phone_number } = args;
         const numericAmount = Math.trunc(Number(amount) || 0);
@@ -1432,11 +1898,16 @@ Deno.serve(async (req: Request) => {
           phone_number: typeof phone_number === "string" ? phone_number.trim() : undefined,
         });
 
-        const verifiedAmount = Math.trunc(Number(verification.amount) || 0);
+        let verifiedAmount = verification.amount !== null
+          ? Math.trunc(Number(verification.amount) || 0)
+          : 0;
+        if (verifiedAmount <= 0) {
+          verifiedAmount = numericAmount;
+        }
         if (verifiedAmount <= 0) {
           return json({ error: "verified amount is invalid" }, 400);
         }
-        if (verifiedAmount !== numericAmount) {
+        if (verification.amount !== null && verifiedAmount !== numericAmount) {
           return json({ error: `verified amount ${verifiedAmount} does not match requested amount ${numericAmount}` }, 400);
         }
 
@@ -1482,9 +1953,17 @@ Deno.serve(async (req: Request) => {
 
         await ensurePlayerNotBlocked(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
-        if (player.main_wallet_balance < numericAmount) {
-          return json({ error: "Insufficient main wallet balance" }, 400);
+        const availableMain = Math.max(0, player.main_wallet_balance - Number((player as { locked_main_balance?: number }).locked_main_balance ?? 0));
+        if (availableMain < numericAmount) {
+          return json({ error: "Insufficient available main wallet balance", code: "INSUFFICIENT_BALANCE" }, 400);
         }
+
+        // Lock funds so they cannot be spent twice while pending.
+        const locked = Number((player as { locked_main_balance?: number }).locked_main_balance ?? 0) + numericAmount;
+        await supabase
+          .from("players")
+          .update({ locked_main_balance: locked })
+          .eq("id", player.id);
 
         const { data: request, error } = await supabase
           .from("wallet_requests")
@@ -1493,12 +1972,17 @@ Deno.serve(async (req: Request) => {
             kind: "withdrawal",
             amount: numericAmount,
             note: typeof note === "string" ? note.slice(0, 240) : null,
+            locked_amount: numericAmount,
+            lifecycle_status: "requested",
           })
           .select("*")
           .single();
-        if (error) return json({ error: error.message }, 500);
+        if (error) {
+          await supabase.from("players").update({ locked_main_balance: locked - numericAmount }).eq("id", player.id);
+          return json({ error: error.message }, 500);
+        }
 
-        await audit(null, String(player_id), "request_withdrawal", { amount: numericAmount, note });
+        await audit(null, String(player_id), "request_withdrawal", { amount: numericAmount, note, locked: true });
         return json({ ok: true, request });
       }
 
@@ -1552,7 +2036,7 @@ Deno.serve(async (req: Request) => {
       case "admin_release_room_reservations": {
         const { player_id, room_id } = args;
         if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         await supabase.from("room_cartela_reservations").delete().eq("room_id", room_id);
         await audit(String(room_id), admin.id, "admin_release_room_reservations", {});
         const market = await buildRoomCartelaMarket(String(room_id));
@@ -1562,7 +2046,7 @@ Deno.serve(async (req: Request) => {
       case "get_admin_summary": {
         const { player_id } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
-        await requireAdmin(String(player_id));
+        await requireAdmin(String(player_id), args.session_token as string | undefined);
 
         const [
           { count: totalUsers },
@@ -1693,17 +2177,79 @@ Deno.serve(async (req: Request) => {
         if (!player || !(player as { is_admin?: boolean }).is_admin) {
           return json({ error: "Invalid credentials" }, 403);
         }
-        if ((player as { admin_password?: string | null }).admin_password !== safePassword) {
-          return json({ error: "Invalid credentials" }, 403);
+
+        const storedHash = (player as { admin_password_hash?: string | null }).admin_password_hash;
+        const storedPlain = (player as { admin_password?: string | null }).admin_password;
+        const valid = storedHash
+          ? await verifyPassword(safePassword, storedHash)
+          : await verifyPassword(safePassword, storedPlain);
+
+        if (!valid) return json({ error: "Invalid credentials" }, 403);
+
+        // Migrate plaintext password to hash on first successful login.
+        if (!storedHash && storedPlain) {
+          const newHash = await hashPassword(safePassword);
+          await supabase
+            .from("players")
+            .update({ admin_password_hash: newHash, admin_password: null })
+            .eq("id", player.id);
         }
+
+        const sessionToken = await createAdminSession(player.id, req);
         await audit(null, player.id, "admin_login", { email: safeEmail });
-        return json({ player: normalizePlayerWallets(player) });
+        return json({
+          player: normalizePlayerWallets(player),
+          session_token: sessionToken,
+          expires_in_hours: SESSION_TTL_HOURS,
+        });
+      }
+
+      case "get_system_settings": {
+        const { player_id, session_token } = args;
+        if (!player_id) return json({ error: "missing player_id" }, 400);
+        await requireAdmin(String(player_id), session_token as string | undefined);
+        const { data: settings } = await supabase.from("system_settings").select("key, value").order("key");
+        const map: Record<string, string> = {};
+        for (const row of settings ?? []) {
+          map[row.key] = settingValueToString(row.value);
+        }
+        return json({ settings: map });
+      }
+
+      case "update_system_settings": {
+        const { player_id, session_token, settings: newSettings } = args;
+        if (!player_id || !newSettings || typeof newSettings !== "object") {
+          return json({ error: "missing fields" }, 400);
+        }
+        const admin = await requireAdmin(String(player_id), session_token as string | undefined);
+        const entries = Object.entries(newSettings as Record<string, unknown>);
+        for (const [key, value] of entries) {
+          await supabase
+            .from("system_settings")
+            .upsert({
+              key: String(key).slice(0, 64),
+              value: parseSettingInput(value),
+              updated_by: admin.id,
+              updated_at: new Date().toISOString(),
+            });
+        }
+        await audit(null, admin.id, "update_system_settings", { keys: entries.map(([k]) => k) });
+        return json({ ok: true });
+      }
+
+      case "admin_logout": {
+        const { session_token } = args;
+        if (session_token) {
+          const tokenHash = await sha256Hex(String(session_token));
+          await supabase.from("admin_sessions").delete().eq("token_hash", tokenHash);
+        }
+        return json({ ok: true });
       }
 
       case "admin_set_user_admin": {
         const { player_id, target_player_id, is_admin } = args;
         if (!player_id || !target_player_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const { data: updated, error } = await supabase
           .from("players")
           .update({ is_admin: Boolean(is_admin) })
@@ -1718,7 +2264,7 @@ Deno.serve(async (req: Request) => {
       case "admin_set_user_blocked": {
         const { player_id, target_player_id, is_blocked } = args;
         if (!player_id || !target_player_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const { data: updated, error } = await supabase
           .from("players")
           .update({ is_blocked: Boolean(is_blocked) })
@@ -1736,7 +2282,7 @@ Deno.serve(async (req: Request) => {
         if (!player_id || !target_player_id || !wallet || numericAmount === 0) {
           return json({ error: "invalid wallet adjustment" }, 400);
         }
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const target = normalizePlayerWallets(await getPlayerOrThrow(String(target_player_id)));
         if (wallet === "main") {
           await updatePlayerWallets(target.id, { main_wallet_balance: Math.max(0, target.main_wallet_balance + numericAmount) });
@@ -1754,7 +2300,7 @@ Deno.serve(async (req: Request) => {
       case "process_wallet_request": {
         const { player_id, request_id, approve } = args;
         if (!player_id || !request_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
 
         const { data: request } = await supabase
           .from("wallet_requests")
@@ -1773,19 +2319,31 @@ Deno.serve(async (req: Request) => {
             await updatePlayerWallets(target.id, { main_wallet_balance: nextMain });
             await recordTx(target.id, null, "deposit", Number(request.amount), nextMain);
           } else {
+            const lockedAmount = Number(request.locked_amount ?? request.amount);
+            const currentLocked = Number((target as { locked_main_balance?: number }).locked_main_balance ?? 0);
             if (target.main_wallet_balance < Number(request.amount)) {
               return json({ error: "Insufficient main wallet balance" }, 400);
             }
             const nextMain = target.main_wallet_balance - Number(request.amount);
+            const nextLocked = Math.max(0, currentLocked - lockedAmount);
             await updatePlayerWallets(target.id, { main_wallet_balance: nextMain });
+            await supabase.from("players").update({ locked_main_balance: nextLocked }).eq("id", target.id);
             await recordTx(target.id, null, "withdrawal", -Number(request.amount), nextMain);
           }
+        } else if (request.kind === "withdrawal") {
+          const lockedAmount = Number(request.locked_amount ?? request.amount);
+          const currentLocked = Number((target as { locked_main_balance?: number }).locked_main_balance ?? 0);
+          await supabase
+            .from("players")
+            .update({ locked_main_balance: Math.max(0, currentLocked - lockedAmount) })
+            .eq("id", target.id);
         }
 
         const { data: updated, error } = await supabase
           .from("wallet_requests")
           .update({
             status: approved ? "approved" : "rejected",
+            lifecycle_status: approved ? (request.kind === "withdrawal" ? "paid" : "credited") : "rejected",
             processed_by: admin.id,
             processed_at: new Date().toISOString(),
           })
@@ -1806,7 +2364,7 @@ Deno.serve(async (req: Request) => {
       case "admin_close_room": {
         const { player_id, room_id } = args;
         if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
 
         const { data: room } = await supabase
           .from("rooms")
@@ -1830,7 +2388,7 @@ Deno.serve(async (req: Request) => {
       case "admin_force_finish_room": {
         const { player_id, room_id } = args;
         if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const room = await getRoomOrThrow(String(room_id));
         await supabase
           .from("rooms")
@@ -1849,7 +2407,7 @@ Deno.serve(async (req: Request) => {
       case "admin_reset_room_state": {
         const { player_id, room_id } = args;
         if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const room = await getRoomOrThrow(String(room_id));
         const lobbyEndsAt = new Date(Date.now() + Number(room.lobby_seconds || 30) * 1000).toISOString();
         await supabase
@@ -1882,7 +2440,7 @@ Deno.serve(async (req: Request) => {
       case "admin_advance_room_round": {
         const { player_id, room_id } = args;
         if (!player_id || !room_id) return json({ error: "missing fields" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
         const room = await getRoomOrThrow(String(room_id));
         const lobbyEndsAt = new Date(Date.now() + Number(room.lobby_seconds || 30) * 1000).toISOString();
         await supabase
@@ -1915,7 +2473,7 @@ Deno.serve(async (req: Request) => {
         // Destructive admin action: delete all room_players rows.
         const { player_id } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
-        const admin = await requireAdmin(String(player_id));
+        const admin = await requireAdmin(String(player_id), args.session_token as string | undefined);
 
         await supabase
           .from("room_players")

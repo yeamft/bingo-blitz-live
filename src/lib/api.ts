@@ -25,7 +25,11 @@ export type Transaction = {
     | "seed"
     | "deposit"
     | "withdrawal"
-    | "transfer_to_play";
+    | "transfer_to_play"
+    | "play_to_main"
+    | "false_claim_penalty"
+    | "admin_credit"
+    | "admin_debit";
   amount: number;
   balance_after: number;
   created_at: string;
@@ -77,6 +81,8 @@ export type AdminSummary = {
 
 export type AdminAuthSession = {
   player: Player;
+  session_token?: string;
+  expires_in_hours?: number;
 };
 
 export type RoomStatus = "lobby" | "live" | "paused" | "finished";
@@ -142,13 +148,46 @@ export type RoomPlayer = {
   joined_at: string;
 };
 
+export type RoomPlayerWithPlayer = RoomPlayer & {
+  player: Player;
+};
+
+function isNetworkFetchError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("fetch failed") ||
+    message.includes("network request failed")
+  );
+}
+
 async function call<T = unknown>(
   action: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  const { data, error } = await supabase.functions.invoke("game-action", {
-    body: { action, ...args },
-  });
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error(
+      "Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env, then restart npm run dev.",
+    );
+  }
+
+  let data: Record<string, unknown> | null = null;
+  let error: { message: string } | null = null;
+  try {
+    ({ data, error } = await supabase.functions.invoke("game-action", {
+      body: { action, ...args },
+    }));
+  } catch (invokeError: unknown) {
+    if (isNetworkFetchError(invokeError)) {
+      throw new Error(
+        `Cannot reach Supabase at ${supabaseUrl}. Check that the project exists, is not paused, and your internet/DNS can resolve it. Then redeploy the game-action function.`,
+      );
+    }
+    throw invokeError instanceof Error ? invokeError : new Error(getErrorMessage(invokeError));
+  }
 
   if (data?.error) {
     const penalty = typeof data?.penalty === "number" ? ` (${data.penalty})` : "";
@@ -156,6 +195,11 @@ async function call<T = unknown>(
   }
 
   if (error) {
+    if (isNetworkFetchError(error)) {
+      throw new Error(
+        `Cannot reach Supabase at ${supabaseUrl}. Check that the project exists, is not paused, and your internet/DNS can resolve it. Then redeploy the game-action function.`,
+      );
+    }
     if (error instanceof FunctionsHttpError) {
       try {
         const body = await error.context.json();
@@ -202,7 +246,7 @@ async function getWalletSummaryWithFallback(player_id: string) {
       throw error;
     }
 
-    const db = supabase as any;
+    const db = supabase;
     const [{ data: player, error: playerError }, { data: transactions, error: txError }, { data: requests, error: requestsError }] =
       await Promise.all([
         db.from("players").select("*").eq("id", player_id).maybeSingle(),
@@ -249,15 +293,15 @@ async function getWalletSummaryWithFallback(player_id: string) {
   }
 }
 
-async function getAdminSummaryWithFallback(player_id: string): Promise<AdminSummary> {
+async function getAdminSummaryWithFallback(player_id: string, session_token?: string): Promise<AdminSummary> {
   try {
-    return await call<AdminSummary>("get_admin_summary", { player_id });
+    return await call<AdminSummary>("get_admin_summary", { player_id, session_token });
   } catch (error: unknown) {
     if (!getErrorMessage(error).toLowerCase().includes("unknown action")) {
       throw error;
     }
 
-    const db = supabase as any;
+    const db = supabase;
     const { data: admin, error: adminError } = await db.from("players").select("*").eq("id", player_id).maybeSingle();
     if (adminError) throw new Error(adminError.message);
     if (!admin?.is_admin) throw new Error("Admin access required");
@@ -323,9 +367,25 @@ async function getAdminSummaryWithFallback(player_id: string): Promise<AdminSumm
   }
 }
 
+export type GameHistoryEntry = {
+  room_id: string;
+  room_code: string;
+  room_name: string | null;
+  stake_amount: number;
+  status: RoomStatus;
+  role: RoomPlayerRole;
+  winner_id: string | null;
+  winning_line: string | null;
+  derash: number;
+  joined_at: string;
+  finished_at: string | null;
+  won: boolean;
+  payout: number;
+};
+
 export const api = {
-  upsertPlayer: (telegram_id: string, username: string) =>
-    call<{ player: Player }>("upsert_player", { telegram_id, username }),
+  upsertPlayer: (telegram_id: string, username: string, phone_number?: string) =>
+    call<{ player: Player }>("upsert_player", { telegram_id, username, phone_number }),
   createRoom: (
     player_id: string,
     stake_amount = 20,
@@ -362,6 +422,10 @@ export const api = {
   getWalletSummary: getWalletSummaryWithFallback,
   transferToPlayWallet: (player_id: string, amount: number) =>
     call<{ ok: true; player: Player }>("transfer_to_play_wallet", { player_id, amount }),
+  transferToMainWallet: (player_id: string, amount: number) =>
+    call<{ ok: true; player: Player }>("transfer_to_main_wallet", { player_id, amount }),
+  workerTickRooms: (worker_id?: string) =>
+    call<{ ok: true; worker_id: string; results: unknown[] }>("worker_tick_rooms", { worker_id }),
   requestDeposit: (player_id: string, amount: number, note?: string) =>
     call<{
       ok: true;
@@ -399,33 +463,59 @@ export const api = {
   listTransactions: (player_id: string) =>
     call<{ transactions: Transaction[]; requests: WalletRequest[] }>("list_transactions", { player_id }),
   getAdminSummary: getAdminSummaryWithFallback,
-  processWalletRequest: (player_id: string, request_id: number, approve: boolean) =>
+  processWalletRequest: (player_id: string, request_id: number, approve: boolean, session_token?: string) =>
     call<{ ok: true; request: WalletRequest }>("process_wallet_request", {
       player_id,
       request_id,
       approve,
+      session_token,
     }),
-  closeRoomAsAdmin: (player_id: string, room_id: string) =>
-    call<{ ok: true }>("admin_close_room", { player_id, room_id }),
-  adminSetUserAdmin: (player_id: string, target_player_id: string, is_admin: boolean) =>
-    call<{ ok: true; player: Player }>("admin_set_user_admin", { player_id, target_player_id, is_admin }),
-  adminSetUserBlocked: (player_id: string, target_player_id: string, is_blocked: boolean) =>
-    call<{ ok: true; player: Player }>("admin_set_user_blocked", { player_id, target_player_id, is_blocked }),
+  closeRoomAsAdmin: (player_id: string, room_id: string, session_token?: string) =>
+    call<{ ok: true }>("admin_close_room", { player_id, room_id, session_token }),
+  adminSetUserAdmin: (player_id: string, target_player_id: string, is_admin: boolean, session_token?: string) =>
+    call<{ ok: true; player: Player }>("admin_set_user_admin", {
+      player_id,
+      target_player_id,
+      is_admin,
+      session_token,
+    }),
+  adminSetUserBlocked: (player_id: string, target_player_id: string, is_blocked: boolean, session_token?: string) =>
+    call<{ ok: true; player: Player }>("admin_set_user_blocked", {
+      player_id,
+      target_player_id,
+      is_blocked,
+      session_token,
+    }),
   adminLogin: (email: string, password: string) =>
     call<AdminAuthSession>("admin_login", { email, password }),
-  adminForceFinishRoom: (player_id: string, room_id: string) =>
-    call<{ ok: true }>("admin_force_finish_room", { player_id, room_id }),
-  adminResetRoomState: (player_id: string, room_id: string) =>
-    call<{ ok: true; room: Room }>("admin_reset_room_state", { player_id, room_id }),
-  adminAdvanceRoomRound: (player_id: string, room_id: string) =>
-    call<{ ok: true; room: Room }>("admin_advance_room_round", { player_id, room_id }),
+  adminLogout: (session_token?: string) =>
+    call<{ ok: true }>("admin_logout", { session_token }),
+  getSystemSettings: (player_id: string, session_token?: string) =>
+    call<{ settings: Record<string, string> }>("get_system_settings", { player_id, session_token }),
+  updateSystemSettings: (player_id: string, settings: Record<string, string>, session_token?: string) =>
+    call<{ ok: true }>("update_system_settings", { player_id, settings, session_token }),
+  adminForceFinishRoom: (player_id: string, room_id: string, session_token?: string) =>
+    call<{ ok: true }>("admin_force_finish_room", { player_id, room_id, session_token }),
+  adminResetRoomState: (player_id: string, room_id: string, session_token?: string) =>
+    call<{ ok: true; room: Room }>("admin_reset_room_state", { player_id, room_id, session_token }),
+  adminAdvanceRoomRound: (player_id: string, room_id: string, session_token?: string) =>
+    call<{ ok: true; room: Room }>("admin_advance_room_round", { player_id, room_id, session_token }),
   adminAdjustWallet: (
     player_id: string,
     target_player_id: string,
     wallet: "main" | "play",
     amount: number,
     reason?: string,
-  ) => call<{ ok: true; player: Player }>("admin_adjust_wallet", { player_id, target_player_id, wallet, amount, reason }),
+    session_token?: string,
+  ) =>
+    call<{ ok: true; player: Player }>("admin_adjust_wallet", {
+      player_id,
+      target_player_id,
+      wallet,
+      amount,
+      reason,
+      session_token,
+    }),
 };
 
 // 75-ball helpers

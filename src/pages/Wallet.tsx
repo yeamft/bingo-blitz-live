@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowRightLeft,
@@ -43,7 +43,7 @@ const WITHDRAW_METHOD_OPTIONS: Array<{
 ];
 
 export default function WalletPage() {
-  const { player, loading } = useTelegramIdentity();
+  const { player, loading, refreshPlayer, offline, updateLocalPlayer } = useTelegramIdentity();
   const { t } = useLang();
   const [summary, setSummary] = useState<{
     total_balance: number;
@@ -65,12 +65,13 @@ export default function WalletPage() {
   const [withdrawMethod, setWithdrawMethod] = useState("bank");
   const [withdrawAccount, setWithdrawAccount] = useState("");
   const [withdrawNote, setWithdrawNote] = useState("");
-  const [submitting, setSubmitting] = useState<null | "transfer" | "deposit" | "withdrawal">(null);
+  const [submitting, setSubmitting] = useState<null | "transfer" | "transferMain" | "deposit" | "withdrawal">(null);
+  const [playToMainAmount, setPlayToMainAmount] = useState("");
   const [transactionPage, setTransactionPage] = useState(0);
 
   const TRANSACTIONS_PER_PAGE = 4;
 
-  async function loadWallet(showSpinner = false) {
+  const loadWallet = useCallback(async (showSpinner = false) => {
     if (!player) return;
     if (showSpinner) setRefreshing(true);
     else setPageLoading(true);
@@ -80,17 +81,24 @@ export default function WalletPage() {
       setTransactions(data.transactions);
       setRequests(data.requests);
     } catch (error: unknown) {
-      toast.error(getErrorMessage(error));
+      // Offline / demo fallback from local player balances
+      setSummary({
+        total_balance:
+          Number(player.main_wallet_balance ?? 0) + Number(player.play_wallet_balance ?? player.wallet_balance ?? 0),
+        main_wallet_balance: Number(player.main_wallet_balance ?? player.wallet_balance ?? 0),
+        play_wallet_balance: Number(player.play_wallet_balance ?? player.wallet_balance ?? 0),
+      });
+      if (!offline) toast.error(getErrorMessage(error));
     } finally {
       setPageLoading(false);
       setRefreshing(false);
     }
-  }
+  }, [player, offline]);
 
   useEffect(() => {
     if (!player) return;
     loadWallet();
-  }, [player?.id]);
+  }, [loadWallet, player]);
 
   const pendingRequests = useMemo(
     () => requests.filter((request) => request.status === "pending").length,
@@ -116,10 +124,77 @@ export default function WalletPage() {
     try {
       await api.transferToPlayWallet(player.id, amount);
       toast.success("Transferred to play wallet");
-      await loadWallet(true);
+      await Promise.all([loadWallet(true), refreshPlayer()]);
       setTransferAmount("");
     } catch (error: unknown) {
-      toast.error(getErrorMessage(error));
+      if (offline && updateLocalPlayer) {
+        const main = Number(player.main_wallet_balance ?? 0);
+        const play = Number(player.play_wallet_balance ?? player.wallet_balance ?? 0);
+        if (main < amount) {
+          toast.error("Insufficient main wallet balance");
+        } else {
+          const next = {
+            ...player,
+            main_wallet_balance: main - amount,
+            play_wallet_balance: play + amount,
+            wallet_balance: play + amount,
+          };
+          updateLocalPlayer(next);
+          setSummary({
+            total_balance: next.main_wallet_balance! + next.play_wallet_balance!,
+            main_wallet_balance: next.main_wallet_balance!,
+            play_wallet_balance: next.play_wallet_balance!,
+          });
+          toast.success("Transferred to play wallet (offline)");
+          setTransferAmount("");
+        }
+      } else {
+        toast.error(getErrorMessage(error));
+      }
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
+  async function handleTransferToMain() {
+    if (!player) return;
+    const amount = Math.trunc(Number(playToMainAmount) || 0);
+    if (amount <= 0) {
+      toast.error("Enter a valid transfer amount");
+      return;
+    }
+
+    setSubmitting("transferMain");
+    try {
+      await api.transferToMainWallet(player.id, amount);
+      toast.success("Transferred to main wallet");
+      await Promise.all([loadWallet(true), refreshPlayer()]);
+      setPlayToMainAmount("");
+    } catch (error: unknown) {
+      if (offline && updateLocalPlayer) {
+        const main = Number(player.main_wallet_balance ?? 0);
+        const play = Number(player.play_wallet_balance ?? player.wallet_balance ?? 0);
+        if (play < amount) {
+          toast.error("Insufficient play wallet balance");
+        } else {
+          const next = {
+            ...player,
+            main_wallet_balance: main + amount,
+            play_wallet_balance: play - amount,
+            wallet_balance: play - amount,
+          };
+          updateLocalPlayer(next);
+          setSummary({
+            total_balance: next.main_wallet_balance! + next.play_wallet_balance!,
+            main_wallet_balance: next.main_wallet_balance!,
+            play_wallet_balance: next.play_wallet_balance!,
+          });
+          toast.success("Transferred to main wallet (offline)");
+          setPlayToMainAmount("");
+        }
+      } else {
+        toast.error(getErrorMessage(error));
+      }
     } finally {
       setSubmitting(null);
     }
@@ -135,6 +210,25 @@ export default function WalletPage() {
     if (amount <= 0) {
       toast.error(`Enter a valid ${kind} amount`);
       return;
+    }
+
+    if (kind === "deposit") {
+      if (!depositReference.trim()) {
+        toast.error("Enter your payment reference or receipt number");
+        return;
+      }
+      if (depositProvider === "cbe" && depositAccountSuffix.trim().length !== 8) {
+        toast.error("CBE deposits require an 8-digit account suffix");
+        return;
+      }
+      if (depositProvider === "abyssinia" && depositAccountSuffix.trim().length !== 5) {
+        toast.error("Bank of Abyssinia deposits require a 5-digit account suffix");
+        return;
+      }
+      if (depositProvider === "cbebirr" && !depositPhoneNumber.trim()) {
+        toast.error("CBE Birr deposits require your phone number");
+        return;
+      }
     }
 
     setSubmitting(kind);
@@ -168,7 +262,7 @@ export default function WalletPage() {
         setWithdrawNote("");
         toast.success("Withdrawal request submitted");
       }
-      await loadWallet(true);
+      await Promise.all([loadWallet(true), refreshPlayer()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -263,13 +357,38 @@ export default function WalletPage() {
           </Button>
         </div>
       </section>
+
+      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
+        <h2 className="text-base font-bold flex items-center gap-2">
+          <ArrowRightLeft className="h-4 w-4 text-primary" /> Move winnings to main wallet
+        </h2>
+        <p className="text-[11px] sm:text-xs text-muted-foreground">
+          Transfer play-wallet balance to main before requesting a withdrawal.
+        </p>
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <Input
+            type="number"
+            min="1"
+            placeholder="Amount"
+            value={playToMainAmount}
+            onChange={(e) => setPlayToMainAmount(e.target.value)}
+          />
+          <Button onClick={handleTransferToMain} disabled={submitting !== null} variant="secondary">
+            {submitting === "transferMain" ? <Loader2 className="h-4 w-4 animate-spin" /> : "To main"}
+          </Button>
+        </div>
+      </section>
       <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
         <div className="space-y-1">
           <h2 className="text-base font-bold flex items-center gap-2">
             <ArrowDownLeft className="h-4 w-4 text-primary" /> Instant deposit verification
           </h2>
           <p className="text-[11px] sm:text-xs text-muted-foreground">
-            Submit your payment reference and the system will verify and credit your wallet automatically.
+            Deposits are verified instantly through{" "}
+            <a href="https://verify.et/docs" target="_blank" rel="noreferrer" className="text-primary underline">
+              Verify.ET
+            </a>{" "}
+            before your main wallet is credited.
           </p>
         </div>
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-2.5 text-[11px] sm:text-xs text-muted-foreground">
@@ -306,9 +425,9 @@ export default function WalletPage() {
         </div>
         {(depositProvider === "cbe" || depositProvider === "abyssinia") && (
           <Input
-            placeholder={depositProvider === "cbe" ? "Account suffix (8 digits for legacy CBE)" : "Suffix (5 digits)"}
+            placeholder={depositProvider === "cbe" ? "Account suffix (8 digits)" : "Account suffix (5 digits)"}
             value={depositAccountSuffix}
-            onChange={(e) => setDepositAccountSuffix(e.target.value)}
+            onChange={(e) => setDepositAccountSuffix(e.target.value.replace(/\D/g, "").slice(0, depositProvider === "cbe" ? 8 : 5))}
           />
         )}
         {depositProvider === "cbebirr" && (

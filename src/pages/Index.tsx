@@ -21,7 +21,8 @@ import { ArrowLeft, Clock3, Eye, Languages, Loader2, Lock, Sparkles, Users, Wall
 
 const STAKE_OPTIONS = [10, 20, 50, 100, 500] as const;
 const DEFAULT_MAX_PLAYERS = 20;
-const DEFAULT_HOUSE_COMMISSION_PCT = 10;
+/** Must match rooms.house_commission_pct / system_settings default (20). */
+const DEFAULT_HOUSE_COMMISSION_PCT = 20;
 
 type LobbyStep = "entry" | "lobby" | "market";
 
@@ -38,7 +39,7 @@ type LobbyRoomCard = {
 };
 
 const Index = () => {
-  const { player, loading, error } = useTelegramIdentity();
+  const { player, loading, error, offline } = useTelegramIdentity();
   const { t, lang, toggle } = useLang();
   const navigate = useNavigate();
 
@@ -74,7 +75,7 @@ const Index = () => {
     let cancelled = false;
 
     async function loadLobbyRooms() {
-      const { data: roomsData, error: roomsError } = await (supabase as any)
+      const { data: roomsData, error: roomsError } = await supabase
         .from("rooms")
         .select("*")
         .eq("status", "lobby")
@@ -83,7 +84,7 @@ const Index = () => {
 
       if (roomsError) {
         if (!cancelled) {
-          toast.error(roomsError.message);
+          // Suppress noisy toasts when offline / Supabase unreachable
           setLobbyReady(true);
         }
         return;
@@ -97,14 +98,13 @@ const Index = () => {
        let counts: Record<string, number> = {};
 
        if (roomIds.length > 0) {
-         const { data: roomPlayersData, error: roomPlayersError } = await (supabase as any)
+         const { data: roomPlayersData, error: roomPlayersError } = await supabase
            .from("room_players")
            .select("room_id, role")
            .in("room_id", roomIds);
 
          if (roomPlayersError) {
            if (!cancelled) {
-             toast.error(roomPlayersError.message);
              setLobbyReady(true);
            }
            return;
@@ -130,7 +130,7 @@ const Index = () => {
              }
            }
            // Re-query rooms to pick up status changes immediately
-           const { data: roomsData2, error: roomsError2 } = await (supabase as any)
+           const { data: roomsData2, error: roomsError2 } = await supabase
              .from("rooms")
              .select("*")
              .eq("status", "lobby")
@@ -146,7 +146,7 @@ const Index = () => {
              const refreshedIds = refreshed.map((r) => r.id);
              let refreshedCounts: Record<string, number> = {};
              if (refreshedIds.length > 0) {
-               const { data: rpData, error: rpError } = await (supabase as any)
+               const { data: rpData, error: rpError } = await supabase
                  .from("room_players")
                  .select("room_id, role")
                  .in("room_id", refreshedIds);
@@ -263,7 +263,7 @@ const Index = () => {
 
     try {
       const normalizedCode = entryCode.trim().toUpperCase();
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from("rooms")
         .select("*")
         .eq("code", normalizedCode)
@@ -314,7 +314,7 @@ const Index = () => {
         return;
       }
 
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from("room_players")
         .select("player_id, card")
         .eq("room_id", room.id)
@@ -465,6 +465,12 @@ const Index = () => {
           <Languages className="h-3.5 w-3.5" /> {lang === "en" ? "EN" : "አማ"}
         </button>
       </div>
+
+      {offline && import.meta.env.DEV && (
+        <div className="mb-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-[11px] text-warning font-semibold">
+          Development offline mode: Supabase is unreachable. Local wallet data only — live gameplay requires a connected project.
+        </div>
+      )}
 
       <header className="relative glass rounded-[1.25rem] p-3 mb-2.5 shadow-elegant overflow-hidden">
         <div className="absolute -right-8 -top-8 h-16 w-16 rounded-full bg-primary/20 blur-2xl" />

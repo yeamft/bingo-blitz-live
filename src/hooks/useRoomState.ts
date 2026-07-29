@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Room, RoomPlayer, Player } from "@/lib/api";
+import { Room, RoomPlayerWithPlayer } from "@/lib/api";
 
 export type RoomState = {
   room: Room | null;
-  players: (RoomPlayer & { player: Player })[];
-  me: RoomPlayer | null;
+  players: RoomPlayerWithPlayer[];
+  me: RoomPlayerWithPlayer | null;
   loading: boolean;
 };
 
 export function useRoomState(roomId: string | null, myPlayerId: string | null): RoomState {
   const [room, setRoom] = useState<Room | null>(null);
-  const [players, setPlayers] = useState<(RoomPlayer & { player: Player })[]>([]);
+  const [players, setPlayers] = useState<RoomPlayerWithPlayer[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export function useRoomState(roomId: string | null, myPlayerId: string | null): 
       ]);
       if (cancelled) return;
       setRoom(r as Room | null);
-      setPlayers((rps as any) || []);
+      setPlayers((rps ?? []) as RoomPlayerWithPlayer[]);
       setLoading(false);
     }
     fetchAll();

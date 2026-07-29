@@ -2,11 +2,89 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Bingo Mini App design system — mobile-first, Telegram-friendly dark theme.
-   All colors HSL. */
+/* Yegara Bingo design system.
+   Light is the base palette; `.dark` overrides it. All colors are HSL triplets
+   so Tailwind can compose them with opacity modifiers. */
 
 @layer base {
   :root {
+    color-scheme: light;
+
+    --background: 220 33% 98%;
+    --foreground: 230 25% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 25% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 25% 12%;
+
+    --primary: 265 84% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 280 88% 64%;
+
+    --secondary: 230 24% 95%;
+    --secondary-foreground: 230 25% 20%;
+
+    --muted: 230 24% 96%;
+    --muted-foreground: 230 12% 42%;
+
+    --accent: 168 76% 34%;
+    --accent-foreground: 0 0% 100%;
+
+    --success: 145 62% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 35 92% 44%;
+    --warning-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 230 18% 89%;
+    --input: 230 18% 89%;
+    --ring: 265 84% 55%;
+
+    --radius: 1rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 230 25% 20%;
+    --sidebar-primary: 265 84% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 24% 96%;
+    --sidebar-accent-foreground: 230 25% 16%;
+    --sidebar-border: 230 18% 90%;
+    --sidebar-ring: 265 84% 55%;
+
+    --chart-1: 265 84% 55%;
+    --chart-2: 168 76% 34%;
+    --chart-3: 35 92% 44%;
+    --chart-4: 200 85% 45%;
+    --chart-5: 340 75% 52%;
+
+    /* Bingo ball colors */
+    --ball-1: 350 78% 50%;
+    --ball-2: 200 85% 45%;
+    --ball-3: 145 62% 36%;
+    --ball-4: 35 92% 44%;
+    --ball-5: 265 84% 55%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
+    --gradient-ball: radial-gradient(circle at 30% 25%, hsl(var(--primary-glow)), hsl(var(--primary)) 60%, hsl(265 84% 42%) 100%);
+    --gradient-win: linear-gradient(135deg, hsl(var(--accent)), hsl(145 62% 42%));
+    --gradient-bg: radial-gradient(ellipse at top, hsl(265 70% 96%) 0%, hsl(var(--background)) 55%);
+
+    --shadow-elegant: 0 12px 32px -16px hsl(265 60% 35% / 0.28);
+    --shadow-ball: 0 6px 18px -6px hsl(var(--primary) / 0.45), inset 0 -4px 8px hsl(265 84% 38% / 0.35), inset 0 2px 4px hsl(var(--primary-glow) / 0.5);
+    --shadow-card: 0 1px 2px hsl(230 25% 20% / 0.06), 0 8px 24px -16px hsl(230 25% 20% / 0.18);
+
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .dark {
+    color-scheme: dark;
+
     --background: 230 25% 7%;
     --foreground: 220 30% 96%;
 
@@ -42,16 +120,27 @@
     --input: 230 18% 20%;
     --ring: 265 90% 66%;
 
-    --radius: 1rem;
+    --sidebar-background: 230 24% 10%;
+    --sidebar-foreground: 220 25% 92%;
+    --sidebar-primary: 265 90% 66%;
+    --sidebar-primary-foreground: 230 30% 8%;
+    --sidebar-accent: 230 18% 16%;
+    --sidebar-accent-foreground: 220 30% 96%;
+    --sidebar-border: 230 18% 20%;
+    --sidebar-ring: 265 90% 66%;
 
-    /* Bingo specific */
+    --chart-1: 265 90% 70%;
+    --chart-2: 165 85% 50%;
+    --chart-3: 40 95% 60%;
+    --chart-4: 200 85% 60%;
+    --chart-5: 340 85% 66%;
+
     --ball-1: 350 85% 60%;
     --ball-2: 200 85% 55%;
     --ball-3: 145 70% 50%;
     --ball-4: 40 95% 60%;
     --ball-5: 265 90% 66%;
 
-    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
     --gradient-ball: radial-gradient(circle at 30% 25%, hsl(var(--primary-glow)), hsl(var(--primary)) 60%, hsl(265 90% 45%) 100%);
     --gradient-win: linear-gradient(135deg, hsl(var(--accent)), hsl(145 70% 55%));
     --gradient-bg: radial-gradient(ellipse at top, hsl(265 60% 18%) 0%, hsl(var(--background)) 60%);
@@ -59,9 +148,6 @@
     --shadow-elegant: 0 10px 40px -10px hsl(265 90% 30% / 0.5);
     --shadow-ball: 0 8px 24px -6px hsl(var(--primary) / 0.6), inset 0 -4px 8px hsl(265 90% 35% / 0.5), inset 0 2px 4px hsl(var(--primary-glow) / 0.6);
     --shadow-card: 0 4px 16px -4px hsl(230 30% 0% / 0.4);
-
-    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    --transition-bounce: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 }
 
@@ -78,6 +164,10 @@
     background-attachment: fixed;
     overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
+  }
+  /* Visible keyboard focus for every interactive element. */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
 
@@ -96,6 +186,13 @@
   }
   .glass {
     @apply bg-card/70 backdrop-blur-xl border border-border/60;
+  }
+  /* Skip link for keyboard and screen reader users. */
+  .skip-link {
+    @apply sr-only;
+  }
+  .skip-link:focus {
+    @apply not-sr-only fixed left-4 top-4 z-[100] rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg;
   }
 }
 
@@ -129,3 +226,14 @@
 }
 .animate-ball-pop { animation: ball-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .animate-pulse-glow { animation: pulse-glow 2s infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

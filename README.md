@@ -184,6 +184,13 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_MINI_APP_URL=...
 APP_URL=...
+
+# Verify.ET deposit verification (server-side in game-action edge function)
+VERIFY_ET_BASE_URL=https://verify.et
+VERIFY_ET_API_KEY=VERIFY_BANK_ET_your_key_here
+# Optional: only accept payments sent to this wallet/account
+# VERIFY_ET_SETTLEMENT_ACCOUNT=0939080897
+# VERIFY_ET_WAIT_MS=8000
 ```
 
 ### Notes
@@ -191,6 +198,13 @@ APP_URL=...
 - The Telegram bot reads `TELEGRAM_BOT_TOKEN` or `BOT_TOKEN`.
 - The bot currently reads Supabase client values from `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
 - `TELEGRAM_MINI_APP_URL` is used to open the web app from Telegram.
+- Deposit verification uses [Verify.ET](https://verify.et/docs). Set `VERIFY_ET_API_KEY` as a Supabase Edge Function secret (not in the frontend bundle):
+
+```bash
+supabase secrets set VERIFY_ET_API_KEY=VERIFY_BANK_ET_your_key_here
+supabase secrets set VERIFY_ET_BASE_URL=https://verify.et
+supabase functions deploy game-action
+```
 
 ## Supabase Setup
 
