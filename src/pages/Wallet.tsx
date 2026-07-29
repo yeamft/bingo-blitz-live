@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
   Building2,
+  ChevronRight,
   CreditCard,
   Loader2,
   RefreshCw,
   Smartphone,
   Wallet as WalletIcon,
-  ShieldCheck,
 } from "lucide-react";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useLang } from "@/lib/i18n";
 import { api, getErrorMessage, Transaction, WalletRequest, type DepositProvider } from "@/lib/api";
 import { toast } from "sonner";
@@ -68,6 +74,7 @@ export default function WalletPage() {
   const [submitting, setSubmitting] = useState<null | "transfer" | "transferMain" | "deposit" | "withdrawal">(null);
   const [playToMainAmount, setPlayToMainAmount] = useState("");
   const [transactionPage, setTransactionPage] = useState(0);
+  const [walletAction, setWalletAction] = useState<null | "deposit" | "withdraw" | "toPlay" | "toMain">(null);
 
   const TRANSACTIONS_PER_PAGE = 4;
 
@@ -126,6 +133,7 @@ export default function WalletPage() {
       toast.success("Transferred to play wallet");
       await Promise.all([loadWallet(true), refreshPlayer()]);
       setTransferAmount("");
+      setWalletAction(null);
     } catch (error: unknown) {
       if (offline && updateLocalPlayer) {
         const main = Number(player.main_wallet_balance ?? 0);
@@ -147,6 +155,7 @@ export default function WalletPage() {
           });
           toast.success("Transferred to play wallet (offline)");
           setTransferAmount("");
+          setWalletAction(null);
         }
       } else {
         toast.error(getErrorMessage(error));
@@ -170,6 +179,7 @@ export default function WalletPage() {
       toast.success("Transferred to main wallet");
       await Promise.all([loadWallet(true), refreshPlayer()]);
       setPlayToMainAmount("");
+      setWalletAction(null);
     } catch (error: unknown) {
       if (offline && updateLocalPlayer) {
         const main = Number(player.main_wallet_balance ?? 0);
@@ -191,6 +201,7 @@ export default function WalletPage() {
           });
           toast.success("Transferred to main wallet (offline)");
           setPlayToMainAmount("");
+          setWalletAction(null);
         }
       } else {
         toast.error(getErrorMessage(error));
@@ -247,6 +258,7 @@ export default function WalletPage() {
         setDepositPhoneNumber("");
         setDepositNote("");
         toast.success("Deposit verified and credited automatically");
+        setWalletAction(null);
       } else {
         await api.requestWithdrawal(
           player.id,
@@ -261,6 +273,7 @@ export default function WalletPage() {
         setWithdrawAccount("");
         setWithdrawNote("");
         toast.success("Withdrawal request submitted");
+        setWalletAction(null);
       }
       await Promise.all([loadWallet(true), refreshPlayer()]);
     } catch (error: unknown) {
@@ -293,9 +306,16 @@ export default function WalletPage() {
   return (
     <main className="min-h-screen max-w-md mx-auto px-2.5 sm:px-4 py-3 sm:py-5 safe-top">
       <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
-        <h1 className="text-lg font-extrabold flex items-center gap-2">
-          <WalletIcon className="h-5 w-5 text-warning" /> Wallet
-        </h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="flex items-center gap-2 text-lg font-extrabold">
+            <WalletIcon className="h-5 w-5 text-warning" /> Wallet
+          </h1>
+          {pendingRequests > 0 && (
+            <span className="rounded-full bg-warning/10 px-2.5 py-1 text-[10px] font-bold text-warning">
+              {pendingRequests} pending
+            </span>
+          )}
+        </div>
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs text-muted-foreground mt-1">Current total balance</p>
@@ -317,187 +337,207 @@ export default function WalletPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 sm:p-3 flex items-start gap-2 text-[11px] sm:text-xs">
-          <ShieldCheck className="h-4 w-4 mt-0.5 text-primary" />
-          <p>
-            {t("mainWallet")} holds your reserve. {t("playWallet")} is used for stakes and payouts.
-          </p>
-        </div>
+      </section>
 
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center">
-          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Pending Requests</p>
-            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{pendingRequests}</p>
-          </div>
-          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Transactions</p>
-            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{transactions.length}</p>
-          </div>
-          <div className="rounded-xl border border-border p-2 sm:p-2.5 bg-card/40">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Requests</p>
-            <p className="font-extrabold text-lg mt-1 tabular-nums text-foreground">{requests.length}</p>
-          </div>
+      <section className="mb-3 rounded-2xl border border-border bg-card p-3 shadow-card">
+        <div className="mb-3">
+          <h2 className="text-base font-bold">What would you like to do?</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <WalletAction
+            icon={<ArrowDownLeft className="h-5 w-5" />}
+            label="Deposit"
+            tone="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+            onClick={() => setWalletAction("deposit")}
+          />
+          <WalletAction
+            icon={<ArrowUpRight className="h-5 w-5" />}
+            label="Withdraw"
+            tone="bg-amber-500/10 text-amber-700 dark:text-amber-400"
+            onClick={() => setWalletAction("withdraw")}
+          />
+          <WalletAction
+            icon={<ArrowRightLeft className="h-5 w-5" />}
+            label="Fund play"
+            tone="bg-primary/10 text-primary"
+            onClick={() => setWalletAction("toPlay")}
+          />
+          <WalletAction
+            icon={<ArrowRightLeft className="h-5 w-5 rotate-180" />}
+            label="Save winnings"
+            tone="bg-sky-500/10 text-sky-700 dark:text-sky-400"
+            onClick={() => setWalletAction("toMain")}
+          />
         </div>
       </section>
 
-      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
-        <h2 className="text-base font-bold flex items-center gap-2">
-          <ArrowRightLeft className="h-4 w-4 text-primary" /> Move money to play wallet
-        </h2>
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+      <Dialog open={walletAction === "toPlay"} onOpenChange={(open) => !open && setWalletAction(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Fund your play wallet</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm font-semibold">Main balance: {mainBalance} ETB</p>
+          <QuickAmounts balance={mainBalance} onSelect={(amount) => setTransferAmount(String(amount))} />
           <Input
             type="number"
             min="1"
-            placeholder="Amount"
+            max={mainBalance}
+            inputMode="numeric"
+            aria-label="Transfer amount"
+            placeholder="Enter amount"
             value={transferAmount}
-            onChange={(e) => setTransferAmount(e.target.value)}
+            onChange={(event) => setTransferAmount(event.target.value)}
           />
-          <Button onClick={handleTransfer} disabled={submitting !== null}>
-            {submitting === "transfer" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Transfer"}
+          <Button className="h-11 w-full font-bold" onClick={handleTransfer} disabled={submitting !== null}>
+            {submitting === "transfer" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Move to play wallet"}
           </Button>
-        </div>
-      </section>
+        </DialogContent>
+      </Dialog>
 
-      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
-        <h2 className="text-base font-bold flex items-center gap-2">
-          <ArrowRightLeft className="h-4 w-4 text-primary" /> Move winnings to main wallet
-        </h2>
-        <p className="text-[11px] sm:text-xs text-muted-foreground">
-          Transfer play-wallet balance to main before requesting a withdrawal.
-        </p>
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+      <Dialog open={walletAction === "toMain"} onOpenChange={(open) => !open && setWalletAction(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save your winnings</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm font-semibold">Play balance: {playBalance} ETB</p>
+          <QuickAmounts balance={playBalance} onSelect={(amount) => setPlayToMainAmount(String(amount))} />
           <Input
             type="number"
             min="1"
-            placeholder="Amount"
+            max={playBalance}
+            inputMode="numeric"
+            aria-label="Transfer amount"
+            placeholder="Enter amount"
             value={playToMainAmount}
-            onChange={(e) => setPlayToMainAmount(e.target.value)}
+            onChange={(event) => setPlayToMainAmount(event.target.value)}
           />
-          <Button onClick={handleTransferToMain} disabled={submitting !== null} variant="secondary">
-            {submitting === "transferMain" ? <Loader2 className="h-4 w-4 animate-spin" /> : "To main"}
+          <Button className="h-11 w-full font-bold" onClick={handleTransferToMain} disabled={submitting !== null}>
+            {submitting === "transferMain" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Move to main wallet"}
           </Button>
-        </div>
-      </section>
-      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
-        <div className="space-y-1">
-          <h2 className="text-base font-bold flex items-center gap-2">
-            <ArrowDownLeft className="h-4 w-4 text-primary" /> Instant deposit verification
-          </h2>
-          <p className="text-[11px] sm:text-xs text-muted-foreground">
-            Deposits are verified instantly through{" "}
-            <a href="https://verify.et/docs" target="_blank" rel="noreferrer" className="text-primary underline">
-              Verify.ET
-            </a>{" "}
-            before your main wallet is credited.
-          </p>
-        </div>
-        <div className="rounded-xl border border-primary/20 bg-primary/5 p-2.5 text-[11px] sm:text-xs text-muted-foreground">
-          Fill only the fields for your provider to keep it quick on mobile.
-        </div>
-        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2">
-          {DEPOSIT_PROVIDER_OPTIONS.map(({ value, label, short, icon: Icon }) => (
-            <Button
-              key={value}
-              type="button"
-              variant={depositProvider === value ? "default" : "outline"}
-              className="h-14 sm:h-16 px-1.5 sm:px-2 flex flex-col gap-1 text-[10px] sm:text-xs"
-              onClick={() => setDepositProvider(value)}
-              title={label}
-            >
-              <Icon className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
-              <span className="leading-none font-semibold">{short}</span>
-            </Button>
-          ))}
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={walletAction === "deposit"} onOpenChange={(open) => !open && setWalletAction(null)}>
+        <DialogContent className="max-h-[90vh] max-w-sm overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Deposit money</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            {DEPOSIT_PROVIDER_OPTIONS.map(({ value, label, short, icon: Icon }) => (
+              <Button
+                key={value}
+                type="button"
+                variant={depositProvider === value ? "default" : "outline"}
+                className="h-14 flex-col gap-1 px-1 text-[10px]"
+                onClick={() => setDepositProvider(value)}
+                title={label}
+              >
+                <Icon className="h-4 w-4" />
+                {short}
+              </Button>
+            ))}
+          </div>
+          <QuickAmounts onSelect={(amount) => setDepositAmount(String(amount))} />
           <Input
             type="number"
             min="1"
-            placeholder="Deposit amount"
+            inputMode="numeric"
+            placeholder="Amount in ETB"
             value={depositAmount}
-            onChange={(e) => setDepositAmount(e.target.value)}
+            onChange={(event) => setDepositAmount(event.target.value)}
           />
           <Input
             placeholder={depositProvider === "cbebirr" ? "Receipt number" : "Payment reference"}
             value={depositReference}
-            onChange={(e) => setDepositReference(e.target.value)}
+            onChange={(event) => setDepositReference(event.target.value)}
           />
-        </div>
-        {(depositProvider === "cbe" || depositProvider === "abyssinia") && (
-          <Input
-            placeholder={depositProvider === "cbe" ? "Account suffix (8 digits)" : "Account suffix (5 digits)"}
-            value={depositAccountSuffix}
-            onChange={(e) => setDepositAccountSuffix(e.target.value.replace(/\D/g, "").slice(0, depositProvider === "cbe" ? 8 : 5))}
+          {(depositProvider === "cbe" || depositProvider === "abyssinia") && (
+            <Input
+              inputMode="numeric"
+              placeholder={depositProvider === "cbe" ? "Last 8 account digits" : "Last 5 account digits"}
+              value={depositAccountSuffix}
+              onChange={(event) =>
+                setDepositAccountSuffix(
+                  event.target.value.replace(/\D/g, "").slice(0, depositProvider === "cbe" ? 8 : 5),
+                )
+              }
+            />
+          )}
+          {depositProvider === "cbebirr" && (
+            <Input
+              type="tel"
+              placeholder="Phone number (251…)"
+              value={depositPhoneNumber}
+              onChange={(event) => setDepositPhoneNumber(event.target.value)}
+            />
+          )}
+          <Textarea
+            className="min-h-20"
+            placeholder="Note (optional)"
+            value={depositNote}
+            onChange={(event) => setDepositNote(event.target.value)}
           />
-        )}
-        {depositProvider === "cbebirr" && (
-          <Input
-            placeholder="Phone number (251...)"
-            value={depositPhoneNumber}
-            onChange={(e) => setDepositPhoneNumber(e.target.value)}
-          />
-        )}
-        <Textarea
-          placeholder="Optional deposit note"
-          value={depositNote}
-          onChange={(e) => setDepositNote(e.target.value)}
-        />
-        <Button size="lg" className="h-11 font-bold w-full" onClick={() => handleRequest("deposit")} disabled={submitting !== null}>
-          {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and credit wallet"}
-        </Button>
-      </section>
+          <Button className="h-11 w-full font-bold" onClick={() => handleRequest("deposit")} disabled={submitting !== null}>
+            {submitting === "deposit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify and deposit"}
+          </Button>
+        </DialogContent>
+      </Dialog>
 
-      <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
-        <h2 className="text-base font-bold flex items-center gap-2">
-          <ArrowUpRight className="h-4 w-4 text-primary" /> Withdrawal request
-        </h2>
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
-          {WITHDRAW_METHOD_OPTIONS.map(({ value, label, icon: Icon }) => (
-            <Button
-              key={value}
-              type="button"
-              variant={withdrawMethod === value ? "default" : "outline"}
-              className="h-12 sm:h-14 px-1.5 sm:px-2 flex flex-col gap-1 text-[10px] sm:text-xs"
-              onClick={() => setWithdrawMethod(value)}
-            >
-              <Icon className="h-4 w-4" />
-              <span className="leading-none font-semibold">{label}</span>
-            </Button>
-          ))}
-        </div>
-        <Input
-          type="number"
-          min="1"
-          placeholder="Withdrawal amount"
-          value={withdrawAmount}
-          onChange={(e) => setWithdrawAmount(e.target.value)}
-        />
-        <Input
-          placeholder={withdrawMethod === "bank" ? "Bank account / holder details" : "Phone or payout account"}
-          value={withdrawAccount}
-          onChange={(e) => setWithdrawAccount(e.target.value)}
-        />
-        <Textarea
-          placeholder="Withdrawal note / destination details"
-          value={withdrawNote}
-          onChange={(e) => setWithdrawNote(e.target.value)}
-        />
-        <Button
-          size="lg"
-          variant="secondary"
-          className="h-11 font-bold w-full"
-          onClick={() => handleRequest("withdrawal")}
-          disabled={submitting !== null}
-        >
-          {submitting === "withdrawal" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit withdrawal request"}
-        </Button>
-      </section>
+      <Dialog open={walletAction === "withdraw"} onOpenChange={(open) => !open && setWalletAction(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Withdraw money</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm font-semibold">Available: {mainBalance} ETB</p>
+          <div className="grid grid-cols-3 gap-2">
+            {WITHDRAW_METHOD_OPTIONS.map(({ value, label, icon: Icon }) => (
+              <Button
+                key={value}
+                type="button"
+                variant={withdrawMethod === value ? "default" : "outline"}
+                className="h-14 flex-col gap-1 px-1 text-[10px]"
+                onClick={() => setWithdrawMethod(value)}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Button>
+            ))}
+          </div>
+          <QuickAmounts balance={mainBalance} onSelect={(amount) => setWithdrawAmount(String(amount))} />
+          <Input
+            type="number"
+            min="1"
+            max={mainBalance}
+            inputMode="numeric"
+            placeholder="Amount in ETB"
+            value={withdrawAmount}
+            onChange={(event) => setWithdrawAmount(event.target.value)}
+          />
+          <Input
+            placeholder={withdrawMethod === "bank" ? "Account number and holder name" : "Payout phone number"}
+            value={withdrawAccount}
+            onChange={(event) => setWithdrawAccount(event.target.value)}
+          />
+          <Textarea
+            className="min-h-20"
+            placeholder="Additional details (optional)"
+            value={withdrawNote}
+            onChange={(event) => setWithdrawNote(event.target.value)}
+          />
+          <Button
+            className="h-11 w-full font-bold"
+            onClick={() => handleRequest("withdrawal")}
+            disabled={submitting !== null}
+          >
+            {submitting === "withdrawal" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Request withdrawal"}
+          </Button>
+        </DialogContent>
+      </Dialog>
 
       <section className="glass rounded-2xl p-3 sm:p-4 shadow-card space-y-2.5 sm:space-y-3 mb-2.5 sm:mb-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="text-sm sm:text-base font-bold">Recent transactions</h2>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Stake, payout, transfer, and wallet activity.</p>
           </div>
           <div className="flex items-center gap-1.5 text-[11px]">
             <Button
@@ -551,7 +591,6 @@ export default function WalletPage() {
       <section className="glass rounded-2xl p-4 sm:p-5 shadow-card space-y-3 sm:space-y-4">
         <div>
           <h2 className="text-base font-bold">Wallet requests</h2>
-          <p className="text-xs text-muted-foreground mt-1">Pending and processed deposit/withdrawal requests.</p>
         </div>
         <div className="space-y-2">
           {requests.length === 0 ? (
@@ -586,5 +625,64 @@ export default function WalletPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function WalletAction({
+  icon,
+  label,
+  tone,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  tone: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex min-h-20 items-center gap-3 rounded-xl border border-border bg-background/60 p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+    >
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tone}`}>{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-bold">{label}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </button>
+  );
+}
+
+function QuickAmounts({
+  balance,
+  onSelect,
+}: {
+  balance?: number;
+  onSelect: (amount: number) => void;
+}) {
+  const suggestions = balance === undefined
+    ? [100, 500, 1000]
+    : [100, 500, Math.max(0, Math.floor(balance))].filter(
+        (amount, index, values) => amount > 0 && amount <= balance && values.indexOf(amount) === index,
+      );
+
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-2" aria-label="Quick amounts">
+      {suggestions.map((amount) => (
+        <Button
+          key={amount}
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 flex-1"
+          onClick={() => onSelect(amount)}
+        >
+          {balance !== undefined && amount === Math.floor(balance) ? "All" : amount} ETB
+        </Button>
+      ))}
+    </div>
   );
 }

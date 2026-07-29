@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -18,6 +17,7 @@ import { BingoBall } from "@/components/bingo/BingoBall";
 import { BingoCard } from "@/components/bingo/BingoCard";
 import { generateCardFromCartela, normalizeCartelaIds, saveSessionCartelas } from "@/lib/cartela";
 import { ArrowLeft, Clock3, Eye, Languages, Loader2, Lock, Sparkles, Users, Wallet } from "lucide-react";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 const STAKE_OPTIONS = [10, 20, 50, 100, 500] as const;
 const DEFAULT_MAX_PLAYERS = 20;
@@ -50,6 +50,7 @@ const Index = () => {
   const [selectedCartelas, setSelectedCartelas] = useState<number[]>([1]);
   const [previewCartela, setPreviewCartela] = useState<number | null>(null);
   const [entryCode, setEntryCode] = useState("");
+  const [roomCodeOpen, setRoomCodeOpen] = useState(false);
   const [creatingPrivateRoom, setCreatingPrivateRoom] = useState(false);
   const [busy, setBusy] = useState<"join" | "entryJoin" | null>(null);
   const [lobbyRooms, setLobbyRooms] = useState<Room[]>([]);
@@ -282,6 +283,7 @@ const Index = () => {
       setSelectedRoomStatus(data.status ?? null);
       setCreatingPrivateRoom(false);
       setStep("market");
+      setRoomCodeOpen(false);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error));
       haptic("error");
@@ -458,12 +460,16 @@ const Index = () => {
           <Wallet className="h-3.5 w-3.5 text-warning" />
           <span>{player.wallet_balance} ETB</span>
         </button>
-        <button
-          onClick={toggle}
-          className="flex items-center gap-1.5 text-xs glass px-3 py-2 rounded-full font-semibold uppercase tracking-wider shadow-card"
-        >
-          <Languages className="h-3.5 w-3.5" /> {lang === "en" ? "EN" : "አማ"}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <ThemeToggle className="h-8 w-8 rounded-full glass shadow-card" />
+          <button
+            type="button"
+            onClick={toggle}
+            className="flex items-center gap-1.5 text-xs glass px-3 py-2 rounded-full font-semibold uppercase tracking-wider shadow-card"
+          >
+            <Languages className="h-3.5 w-3.5" /> {lang === "en" ? "EN" : "አማ"}
+          </button>
+        </div>
       </div>
 
       {offline && import.meta.env.DEV && (
@@ -472,157 +478,168 @@ const Index = () => {
         </div>
       )}
 
-      <header className="relative glass rounded-[1.25rem] p-3 mb-2.5 shadow-elegant overflow-hidden">
-        <div className="absolute -right-8 -top-8 h-16 w-16 rounded-full bg-primary/20 blur-2xl" />
-        <div className="relative flex items-start justify-between gap-3">
+      <header className="relative mb-3 overflow-hidden rounded-3xl border border-border bg-card p-5 shadow-elegant">
+        <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-primary/20 blur-3xl" />
+        <div className="relative flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] text-primary-glow mb-1.5">
-              <Sparkles className="h-3 w-3" /> Live Bingo
+            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              Games are open
             </div>
-            <h1 className="text-[1.65rem] font-black tracking-tight leading-none">{t("appName")}</h1>
+            <p className="text-sm font-semibold text-muted-foreground">{player.username}</p>
+            <h1 className="mt-0.5 text-2xl font-black tracking-tight">{t("appName")}</h1>
           </div>
-          <div className="relative h-14 w-14 shrink-0">
-            <BingoBall number={7} size="sm" className="absolute left-0 top-1 rotate-[-14deg] scale-90" showLetter={false} />
-            <BingoBall number={42} size="sm" className="absolute right-0 top-4 z-10" showLetter={false} />
-            <BingoBall number={68} size="sm" className="absolute bottom-0 left-3 rotate-12 scale-90" showLetter={false} />
+          <div className="relative h-20 w-20 shrink-0">
+            <BingoBall number={7} size="sm" className="absolute left-0 top-1 rotate-[-14deg]" showLetter={false} />
+            <BingoBall number={42} size="md" className="absolute right-0 top-5 z-10" showLetter={false} />
+            <BingoBall number={68} size="sm" className="absolute bottom-0 left-4 rotate-12" showLetter={false} />
           </div>
-        </div>
-
-        <div className={`relative grid gap-1.5 mt-2 ${step === "market" ? "grid-cols-3" : "grid-cols-2"}`}>
-          <div className="rounded-xl bg-secondary/70 p-1.5 border border-border/60">
-            <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{t("playingAs")}</p>
-            <p className="font-black truncate mt-0.5 text-[13px]">{player.username}</p>
-          </div>
-          <div className="rounded-xl bg-secondary/70 p-1.5 border border-border/60">
-            <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Step</p>
-            <p className="font-black mt-0.5 text-[13px]">
-              {step === "entry" ? t("gameEntry") : step === "lobby" ? "Lobby" : t("cartelaMarket")}
-            </p>
-          </div>
-          {step === "market" && (
-            <div className="rounded-xl bg-warning/10 px-1.5 py-1.5 border border-warning/20">
-              <p className="text-[9px] uppercase tracking-wide text-warning">Stake</p>
-              <p className="font-black mt-0.5 text-[13px] leading-none text-warning">{selectedStake} ETB</p>
-            </div>
-          )}
         </div>
       </header>
 
       {step === "entry" ? (
         <section className="space-y-3">
-          <div className="glass rounded-2xl p-3.5 shadow-card space-y-3">
-            <div>
-              <h2 className="text-base font-black">{t("gameEntry")}</h2>
-              <p className="text-[11px] text-muted-foreground mt-1">{t("gameEntryHint")}</p>
-            </div>
+          <button
+            type="button"
+            onClick={() => {
+              setCreatingPrivateRoom(false);
+              setStep("lobby");
+            }}
+            className="group relative w-full overflow-hidden rounded-3xl gradient-primary p-5 text-left text-primary-foreground shadow-elegant transition-transform active:scale-[0.98]"
+          >
+            <Sparkles className="absolute -right-3 -top-3 h-24 w-24 opacity-15" />
+            <span className="relative block text-xs font-bold uppercase tracking-[0.16em] opacity-80">Quick play</span>
+            <span className="relative mt-1 block text-2xl font-black">Play Bingo</span>
+            <span className="relative mt-5 inline-flex items-center rounded-full bg-white/20 px-4 py-2 text-sm font-bold">
+              Find a game <Users className="ml-2 h-4 w-4" />
+            </span>
+          </button>
 
-            <div className="grid gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setCreatingPrivateRoom(false);
-                  setStep("lobby");
-                }}
-                className="h-14 rounded-2xl font-black text-base justify-start px-4"
-              >
-                <Users className="h-5 w-5 mr-3" /> {t("enterPublicLobby")}
-              </Button>
-
-              <Button
-                type="button"
-                onClick={handleCreatePrivateRoomStart}
-                className="h-10 rounded-xl gradient-primary text-primary-foreground font-black text-sm"
-              >
-                <Lock className="h-4 w-4 mr-2" /> {t("createPrivateRoom")}
-              </Button>
-
-              <div className="rounded-xl border border-border bg-card/40 p-2.5 space-y-2">
-                <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wide">{t("joinWithRoomCode")}</label>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={t("roomCodePlaceholder")}
-                    value={entryCode}
-                    onChange={(e) => setEntryCode(e.target.value.toUpperCase().slice(0, 8))}
-                    className="h-9 rounded-xl text-center text-sm font-black tracking-[0.2em]"
-                  />
-                  <Button
-                    type="button"
-                    onClick={handleJoinByCode}
-                    disabled={!entryCode.trim() || busy !== null}
-                    className="h-9 rounded-xl px-3 text-xs font-black"
-                  >
-                    {busy === "entryJoin" ? <Loader2 className="h-4 w-4 animate-spin" /> : t("join")}
-                  </Button>
-                </div>
-              </div>
-            </div>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setRoomCodeOpen(true)}
+              className="flex min-h-24 flex-col items-start justify-between rounded-2xl border border-border bg-card p-4 text-left shadow-card transition-colors hover:border-primary/40 hover:bg-primary/5"
+            >
+              <Lock className="h-5 w-5 text-primary" />
+              <span>
+                <span className="block text-sm font-bold">{t("joinWithRoomCode")}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={handleCreatePrivateRoomStart}
+              className="flex min-h-24 flex-col items-start justify-between rounded-2xl border border-border bg-card p-4 text-left shadow-card transition-colors hover:border-primary/40 hover:bg-primary/5"
+            >
+              <Users className="h-5 w-5 text-accent" />
+              <span>
+                <span className="block text-sm font-bold">{t("createPrivateRoom")}</span>
+              </span>
+            </button>
           </div>
+
         </section>
       ) : step === "lobby" ? (
-        <section className="space-y-2.5">
-          <div className="flex items-center justify-between px-1">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
             <button
               type="button"
               onClick={() => setStep("entry")}
-              className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold text-muted-foreground"
+              className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-sm font-semibold text-muted-foreground hover:text-foreground"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> {t("back")}
+              <ArrowLeft className="h-4 w-4" /> {t("back")}
             </button>
-            <Button variant="secondary" size="sm" className="h-8 px-3 text-[11px]" onClick={() => window.location.reload()}>
-              Refresh
-            </Button>
+            <span className="text-xs text-muted-foreground">
+              Balance <span className="font-bold text-foreground">{player.wallet_balance} ETB</span>
+            </span>
           </div>
+
           <div>
-            <h2 className="text-base font-black">Bingo Lobby</h2>
-            <p className="text-[11px] text-muted-foreground">Real-time games grouped by stake amount.</p>
+            <h2 className="text-xl font-black">Choose your stake</h2>
           </div>
 
-          {lobbyCards.map((card) => (
-            <article key={card.stake} className="glass rounded-2xl p-2.5 shadow-card">
-              <div className="flex items-start gap-2.5">
-                <div className="shrink-0 rounded-xl bg-primary/10 border border-primary/20 px-2.5 py-2 text-center min-w-[72px]">
-                  <p className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">Stake</p>
-                  <h3 className="text-base font-black leading-none mt-1">{card.stake}</h3>
-                  <p className="text-[9px] font-bold text-muted-foreground mt-1">Birr</p>
-                </div>
+          {lobbyCards.map((card) => {
+            const isOpen = card.joinableAsPlayer;
+            const isWatchable = Boolean(card.room && !isOpen);
+            const canStartRoom = !card.room;
+            const canSelect = isOpen || isWatchable || canStartRoom;
+            const fillPct = Math.min(100, Math.round((card.playersJoined / card.maxPlayers) * 100));
+            const startingSoon = isOpen && card.countdownSeconds !== null && card.countdownSeconds <= 10;
 
-                <div className="min-w-0 flex-1 flex flex-col gap-1.5">
-                  <div className="flex items-start justify-between gap-2">
+            return (
+              <article
+                key={card.stake}
+                className={`overflow-hidden rounded-2xl border bg-card shadow-card transition-colors ${
+                  startingSoon ? "border-warning/50" : isOpen ? "border-border hover:border-primary/40" : "border-border/60"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSelectGame(card)}
+                  disabled={!canSelect}
+                  className="w-full p-4 text-left disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[9px] font-semibold text-muted-foreground truncate">
-                        Players {card.playersJoined}/{card.maxPlayers}
-                      </p>
-                      <p className="text-[9px] font-semibold text-muted-foreground truncate">
-                        Collected {card.collectedAmount} ETB
-                      </p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry</p>
+                      <p className="text-2xl font-black leading-tight">{card.stake} ETB</p>
                     </div>
-                    <span className="rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-wide border border-primary/20 bg-primary/10 text-primary whitespace-nowrap">
-                      {card.statusLabel}
-                    </span>
+                    <div className="text-right">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Win up to</p>
+                      <p className="text-2xl font-black leading-tight text-warning">{card.prizePool}</p>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-[9px]">
-                    <div className="min-w-0 flex items-center gap-1 text-muted-foreground">
-                      <Wallet className="h-3 w-3 shrink-0" />
-                      <span className="truncate">Prize {card.prizePool} ETB</span>
+                  <div className="mt-3">
+                    <div className="mb-1.5 flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <Users className="h-3.5 w-3.5" />
+                        {card.playersJoined} of {card.maxPlayers} players
+                      </span>
+                      <span
+                        className={`flex items-center gap-1.5 font-semibold ${
+                          startingSoon ? "text-warning" : "text-muted-foreground"
+                        }`}
+                      >
+                        <Clock3 className="h-3.5 w-3.5" />
+                        {isOpen && card.countdownSeconds !== null
+                          ? `Starts in ${card.countdownSeconds}s`
+                          : card.statusLabel}
+                      </span>
                     </div>
-                    <div className="min-w-0 flex items-center justify-center gap-1 text-muted-foreground text-center">
-                      <Clock3 className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{card.joinableAsPlayer && card.countdownSeconds !== null ? `Join ${card.countdownSeconds}s` : card.room ? "Closed" : "Open"}</span>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                      <div
+                        className={`h-full rounded-full transition-all ${startingSoon ? "bg-warning" : "bg-primary"}`}
+                        style={{ width: `${Math.max(fillPct, 3)}%` }}
+                      />
                     </div>
-                    <Button
-                      onClick={() => handleSelectGame(card)}
-                      disabled={Boolean(card.room && !card.joinableAsPlayer)}
-                      className="h-5 rounded-md gradient-primary text-primary-foreground font-black shadow-elegant text-[8px] px-2 min-w-0 disabled:pointer-events-none disabled:opacity-50"
-                    >
-                      Join
-                    </Button>
                   </div>
-                </div>
-              </div>
-            </article>
-          ))}
+
+                  <div
+                    className={`mt-4 flex h-11 items-center justify-center rounded-xl text-sm font-bold ${
+                      isOpen || canStartRoom
+                        ? "gradient-primary text-primary-foreground shadow-elegant"
+                        : isWatchable
+                          ? "border border-border bg-secondary text-foreground"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {isOpen ? (
+                      <>Join for {card.stake} ETB</>
+                    ) : canStartRoom ? (
+                      <>Start a {card.stake} ETB game</>
+                    ) : isWatchable ? (
+                      <>
+                        <Eye className="mr-2 h-4 w-4" /> Watch this game
+                      </>
+                    ) : (
+                      "Waiting for players"
+                    )}
+                  </div>
+                </button>
+              </article>
+            );
+          })}
         </section>
       ) : (
         <section className="glass rounded-2xl p-3.5 shadow-card space-y-3">
@@ -636,9 +653,7 @@ const Index = () => {
                 <ArrowLeft className="h-3.5 w-3.5" /> {t("back")}
               </button>
               <h2 className="text-base font-black leading-none">{t("cartelaMarket")}</h2>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                {creatingPrivateRoom ? t("privateRoomSetup") : `${t("selectedStakeHint")}: ${selectedStake} ETB`}
-              </p>
+              <p className="mt-1 text-xs font-bold text-warning">{selectedStake} ETB</p>
             </div>
             <div className="rounded-xl gradient-primary text-primary-foreground p-2 shadow-elegant">
               <Users className="h-4 w-4" />
@@ -674,7 +689,6 @@ const Index = () => {
                 {t("selected")}: <span className="font-bold text-foreground">{selectedCartelas.length}/3</span>
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground mb-2">{t("chooseUpToThree")}</p>
 
             <div className="grid grid-cols-10 gap-1 max-h-64 overflow-y-auto pr-1 rounded-xl">
               {Array.from({ length: 200 }, (_, i) => i + 1).map((n) => {
@@ -769,13 +783,38 @@ const Index = () => {
         </section>
       )}
 
+      <Dialog open={roomCodeOpen} onOpenChange={setRoomCodeOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("joinWithRoomCode")}</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder={t("roomCodePlaceholder")}
+            value={entryCode}
+            onChange={(event) => setEntryCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && entryCode.trim() && busy === null) void handleJoinByCode();
+            }}
+            className="h-12 rounded-xl text-center text-lg font-black tracking-[0.25em]"
+          />
+          <Button
+            type="button"
+            onClick={handleJoinByCode}
+            disabled={!entryCode.trim() || busy !== null}
+            className="h-11 w-full rounded-xl font-bold"
+          >
+            {busy === "entryJoin" ? <Loader2 className="h-4 w-4 animate-spin" /> : t("join")}
+          </Button>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={previewCartela !== null} onOpenChange={(open) => !open && setPreviewCartela(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>
               {t("preview")} #{previewCartela}
             </DialogTitle>
-            <DialogDescription>{t("cartelaMarket")}</DialogDescription>
           </DialogHeader>
           <BingoCard numbers={cartelaPreviewCard} marked={[0]} current={null} disabled />
         </DialogContent>

@@ -83,18 +83,27 @@ async function verifyPassword(password: string, stored: string | null | undefine
   return computed === hashB64;
 }
 
-async function createAdminSession(playerId: string, req: Request): Promise<string> {
-  const token = crypto.randomUUID() + crypto.randomUUID();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000).toISOString();
-  await supabase.from("admin_sessions").insert({
-    player_id: playerId,
-    token_hash: tokenHash,
-    expires_at: expiresAt,
-    ip_address: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
-    user_agent: req.headers.get("user-agent")?.slice(0, 256) ?? null,
-  });
-  return token;
+async function createAdminSession(playerId: string, req: Request): Promise<string | null> {
+  try {
+    const token = crypto.randomUUID() + crypto.randomUUID();
+    const tokenHash = await sha256Hex(token);
+    const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000).toISOString();
+    const { error } = await supabase.from("admin_sessions").insert({
+      player_id: playerId,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+      ip_address: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+      user_agent: req.headers.get("user-agent")?.slice(0, 256) ?? null,
+    });
+    if (error) {
+      console.warn("admin_sessions insert failed; continuing without session token", error.message);
+      return null;
+    }
+    return token;
+  } catch (error) {
+    console.warn("admin_sessions unavailable; continuing without session token", error);
+    return null;
+  }
 }
 
 async function resolveAdminFromSession(sessionToken: string | undefined): Promise<{ id: string; is_admin: boolean } | null> {
@@ -116,21 +125,27 @@ async function resolveAdminFromSession(sessionToken: string | undefined): Promis
 }
 
 async function checkRateLimit(scope: string, identifier: string): Promise<void> {
-  const windowStart = new Date(Math.floor(Date.now() / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS).toISOString();
-  const { data: existing } = await supabase
-    .from("rate_limits")
-    .select("id, request_count")
-    .eq("scope", scope)
-    .eq("identifier", identifier)
-    .eq("window_start", windowStart)
-    .maybeSingle();
-  if (existing && existing.request_count >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new Error("Rate limit exceeded. Please try again shortly.");
-  }
-  if (existing) {
-    await supabase.from("rate_limits").update({ request_count: existing.request_count + 1 }).eq("id", existing.id);
-  } else {
-    await supabase.from("rate_limits").insert({ scope, identifier, window_start: windowStart, request_count: 1 });
+  try {
+    const windowStart = new Date(Math.floor(Date.now() / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS).toISOString();
+    const { data: existing, error } = await supabase
+      .from("rate_limits")
+      .select("id, request_count")
+      .eq("scope", scope)
+      .eq("identifier", identifier)
+      .eq("window_start", windowStart)
+      .maybeSingle();
+    if (error) return; // table may not exist yet — skip
+    if (existing && existing.request_count >= RATE_LIMIT_MAX_REQUESTS) {
+      throw new Error("Rate limit exceeded. Please try again shortly.");
+    }
+    if (existing) {
+      await supabase.from("rate_limits").update({ request_count: existing.request_count + 1 }).eq("id", existing.id);
+    } else {
+      await supabase.from("rate_limits").insert({ scope, identifier, window_start: windowStart, request_count: 1 });
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Rate limit exceeded")) throw error;
+    // Ignore rate-limit infrastructure failures so login/gameplay still work.
   }
 }
 
@@ -2169,11 +2184,12 @@ Deno.serve(async (req: Request) => {
         const safePassword = typeof password === "string" ? password : "";
         if (!safeEmail || !safePassword) return json({ error: "missing credentials" }, 400);
 
-        const { data: player } = await supabase
+        const { data: player, error: playerError } = await supabase
           .from("players")
           .select("*")
           .eq("admin_email", safeEmail)
           .maybeSingle();
+        if (playerError) return json({ error: playerError.message }, 500);
         if (!player || !(player as { is_admin?: boolean }).is_admin) {
           return json({ error: "Invalid credentials" }, 403);
         }
@@ -2188,18 +2204,22 @@ Deno.serve(async (req: Request) => {
 
         // Migrate plaintext password to hash on first successful login.
         if (!storedHash && storedPlain) {
-          const newHash = await hashPassword(safePassword);
-          await supabase
-            .from("players")
-            .update({ admin_password_hash: newHash, admin_password: null })
-            .eq("id", player.id);
+          try {
+            const newHash = await hashPassword(safePassword);
+            await supabase
+              .from("players")
+              .update({ admin_password_hash: newHash, admin_password: null })
+              .eq("id", player.id);
+          } catch {
+            // Hash column may not exist yet — ignore.
+          }
         }
 
         const sessionToken = await createAdminSession(player.id, req);
         await audit(null, player.id, "admin_login", { email: safeEmail });
         return json({
           player: normalizePlayerWallets(player),
-          session_token: sessionToken,
+          session_token: sessionToken ?? undefined,
           expires_in_hours: SESSION_TTL_HOURS,
         });
       }

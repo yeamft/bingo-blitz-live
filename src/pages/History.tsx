@@ -72,10 +72,7 @@ export default function HistoryPage() {
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
           ) : history.length === 0 ? (
-            <p className="text-sm text-muted-foreground mt-1">
-              No games yet for <span className="font-semibold text-foreground">{player.username}</span>.
-              Join a lobby to play your first round.
-            </p>
+            <p className="mt-2 text-sm text-muted-foreground">No games yet.</p>
           ) : (
             <div className="space-y-2 mt-3">
               {history.map((entry) => (

@@ -48,12 +48,15 @@ drop policy if exists "wallet requests insertable" on public.wallet_requests;
 drop policy if exists "room cartela reservations readable" on public.room_cartela_reservations;
 
 -- Public read for lobby (rooms + room_players only — no financial data)
+drop policy if exists "rooms_public_read" on public.rooms;
 create policy "rooms_public_read" on public.rooms
   for select using (true);
 
+drop policy if exists "room_players_public_read" on public.room_players;
 create policy "room_players_public_read" on public.room_players
   for select using (true);
 
+drop policy if exists "cartela_reservations_public_read" on public.room_cartela_reservations;
 create policy "cartela_reservations_public_read" on public.room_cartela_reservations
   for select using (true);
 
