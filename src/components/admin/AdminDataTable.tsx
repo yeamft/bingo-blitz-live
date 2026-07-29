@@ -38,7 +38,6 @@ type AdminDataTableProps<T> = {
 
 export function AdminDataTable<T>({
   title,
-  description,
   columns,
   rows,
   rowKey,
@@ -62,11 +61,10 @@ export function AdminDataTable<T>({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-card">
-      {(title || description || onExport) && (
+      {(title || onExport) && (
         <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             {title && <h3 className="text-base font-bold text-foreground">{title}</h3>}
-            {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
           </div>
           {onExport && (
             <Button type="button" variant="outline" size="sm" onClick={onExport} className="gap-2 self-start">

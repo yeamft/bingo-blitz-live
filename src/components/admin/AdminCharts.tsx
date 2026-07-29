@@ -136,7 +136,6 @@ export function AdminFinancialCharts({ summary }: AdminChartsProps) {
 
 function ChartCard({
   title,
-  description,
   children,
   className = "",
 }: {
@@ -149,7 +148,6 @@ function ChartCard({
     <div className={`rounded-2xl border border-border bg-card p-5 shadow-card ${className}`}>
       <div className="mb-4 border-b border-border pb-4">
         <h3 className="text-base font-bold text-foreground">{title}</h3>
-        <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
       </div>
       {children}
     </div>

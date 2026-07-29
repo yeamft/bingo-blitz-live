@@ -650,9 +650,6 @@ export default function AdminPage() {
                 <Shield className="h-6 w-6" />
               </div>
               <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin Login</h1>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Sign in with your administrator credentials to access the operations dashboard.
-              </p>
             </div>
 
             <div className="space-y-3">
@@ -1017,7 +1014,6 @@ export default function AdminPage() {
 
 function AdminPanel({
   title,
-  description,
   children,
   icon,
 }: {
@@ -1032,7 +1028,6 @@ function AdminPanel({
         {icon && <div className="rounded-xl bg-primary/10 p-2 text-primary">{icon}</div>}
         <div>
           <h3 className="text-base font-bold text-foreground">{title}</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
         </div>
       </div>
       {children}
@@ -1098,7 +1093,6 @@ function TransactionRow({ transaction }: { transaction: Transaction }) {
 
 function WalletRequestSection({
   title,
-  description,
   requests,
   busy,
   onProcess,
@@ -1118,7 +1112,6 @@ function WalletRequestSection({
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h3 className="text-base font-bold text-foreground">{title}</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
         </div>
         <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
           {pendingCount} pending

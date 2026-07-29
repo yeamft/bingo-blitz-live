@@ -1277,9 +1277,19 @@ Deno.serve(async (req: Request) => {
             code: "REGISTRATION_REQUIRED",
           }, 403);
         }
+        // Small welcome seed only — players deposit for real funds.
+        const seedMain = 0;
+        const seedPlay = 20;
         const { data, error } = await supabase
           .from("players")
-          .insert({ telegram_id: tid, username: uname, phone_number: phone })
+          .insert({
+            telegram_id: tid,
+            username: uname,
+            phone_number: phone,
+            wallet_balance: seedPlay,
+            main_wallet_balance: seedMain,
+            play_wallet_balance: seedPlay,
+          })
           .select()
           .single();
         if (error) {
@@ -1289,11 +1299,9 @@ Deno.serve(async (req: Request) => {
           return json({ error: error.message }, 500);
         }
         const seeded = normalizePlayerWallets(data);
-        await updatePlayerWallets(data.id, {
-          main_wallet_balance: seeded.main_wallet_balance,
-          play_wallet_balance: seeded.play_wallet_balance,
-        });
-        await recordTx(data.id, null, "seed", seeded.play_wallet_balance, seeded.play_wallet_balance);
+        if (seedPlay > 0) {
+          await recordTx(data.id, null, "seed", seedPlay, seedPlay);
+        }
         return json({ player: seeded });
       }
 

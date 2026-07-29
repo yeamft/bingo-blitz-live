@@ -28,7 +28,6 @@ function labelFallback(section: AdminSection): string {
 export function AdminHeader({
   section,
   label,
-  description,
   refreshing,
   onRefresh,
   actions,
@@ -51,7 +50,6 @@ export function AdminHeader({
           </nav>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">{label}</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
 

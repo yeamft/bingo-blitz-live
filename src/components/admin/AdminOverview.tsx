@@ -85,11 +85,10 @@ export function AdminOverview({ summary, onNavigateDeposits, onNavigateWallet }:
   );
 }
 
-function SectionHeading({ title, description }: { title: string; description: string }) {
+function SectionHeading({ title }: { title: string; description: string }) {
   return (
     <div>
       <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-muted-foreground">{title}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">{description}</p>
     </div>
   );
 }
@@ -97,7 +96,6 @@ function SectionHeading({ title, description }: { title: string; description: st
 function KpiCard({
   label,
   value,
-  hint,
   tone,
   actionLabel,
   onAction,
@@ -113,8 +111,7 @@ function KpiCard({
     <div className="admin-kpi-card rounded-2xl border border-border bg-card p-5 shadow-card">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className={`mt-2 text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">{hint}</p>
+      <div className="mt-3 flex items-center justify-end gap-2">
         {actionLabel && onAction && (
           <button type="button" onClick={onAction} className="text-xs font-semibold text-primary hover:underline">
             {actionLabel}
@@ -155,7 +152,6 @@ function RoomStatusPill({ label, value }: { label: string; value: number }) {
 
 function Panel({
   title,
-  description,
   children,
   actionLabel,
   onAction,
@@ -171,7 +167,6 @@ function Panel({
       <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h3 className="text-base font-bold text-foreground">{title}</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
         </div>
         {actionLabel && onAction && (
           <button type="button" onClick={onAction} className="text-xs font-semibold text-primary hover:underline">
