@@ -24,6 +24,7 @@ import { AdminFinancialCharts } from "@/components/admin/AdminCharts";
 import { AdminDataTable, type AdminColumn } from "@/components/admin/AdminDataTable";
 import { hasStoredThemePreference } from "@/components/theme/ThemeProvider";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
 import { usePaginatedRows } from "@/hooks/usePaginatedRows";
 import {
   api,
@@ -109,6 +110,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function AdminPage() {
   const { setTheme } = useTheme();
+  const { player: currentPlayer, loading: identityLoading } = useTelegramIdentity();
   const [session, setSession] = useState<AdminAuthSession | null>(() => readStoredSession());
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>(DEFAULT_SYSTEM_SETTINGS);
@@ -178,6 +180,14 @@ export default function AdminPage() {
       setTheme("light");
     }
   }, [setTheme]);
+
+  // Local development convenience: an already admin-enabled Telegram player
+  // may enter without the separate email/password prompt. Production always
+  // requires a normal admin session.
+  useEffect(() => {
+    if (!import.meta.env.DEV || session || identityLoading || !currentPlayer?.is_admin) return;
+    setSession({ player: currentPlayer });
+  }, [currentPlayer, identityLoading, session]);
 
   useEffect(() => {
     if (session?.player?.is_admin) {
