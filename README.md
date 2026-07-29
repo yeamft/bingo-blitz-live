@@ -210,6 +210,8 @@ supabase functions deploy game-action
 supabase functions deploy telegram-bot
 ```
 
+- Every payment reference is single-use. `request_deposit` claims `(provider, provider_reference)` in `wallet_requests` before calling Verify.ET, so a repeat or concurrent submission of the same receipt is rejected with `REFERENCE_ALREADY_USED` (HTTP 409) instead of crediting the wallet twice. Verify.ET's own `confirmationHistory.confirmedBefore` flag is also enforced, and the `Idempotency-Key` sent to Verify.ET is derived from the reference so retries never consume extra verification credits. Requires migration `20260729160000_deposit_reference_single_use.sql`.
+
 ## Supabase Setup
 
 The repository contains:

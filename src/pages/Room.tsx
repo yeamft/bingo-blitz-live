@@ -6,7 +6,6 @@ import { api, getErrorMessage } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { BingoCard } from "@/components/bingo/BingoCard";
 import { CompactBingoCard } from "@/components/bingo/CompactBingoCard";
@@ -25,10 +24,12 @@ import {
   Eye,
   RefreshCw,
   Coins,
-  Radio,
   Lock,
   ShoppingCart,
   Globe,
+  Hand,
+  Zap,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolvePlayerCards, splitCards, readSessionCartelas } from "@/lib/cartela";
@@ -136,6 +137,8 @@ function RoomInner({
   const { t, lang, toggle } = useLang();
   const isHost = room.host_id === myPlayerId;
   const [localAutoFill, setLocalAutoFill] = useState<boolean>(Boolean(me?.auto_fill ?? true));
+  const [manualMarked, setManualMarked] = useState<number[]>(me?.marked ?? [0]);
+  const [markingNumbers, setMarkingNumbers] = useState<Set<number>>(() => new Set());
   const [winnerModalOpen, setWinnerModalOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const called = useMemo(
@@ -154,7 +157,9 @@ function RoomInner({
     [me?.card, me?.selected_cartelas, sessionCartelas],
   );
   const totalMarkable = myCards.length > 0 ? myCards.length * 24 : 0;
-  const totalMarked = me?.marked.filter((n) => n !== 0).length ?? 0;
+  const totalMarked = manualMarked.filter((n) => n !== 0).length;
+  const manualBingoReady =
+    !localAutoFill && myCards.length > 0 && hasAnyCompletedLine(myCards, manualMarked);
   const winnerRoomPlayer = players.find((p) => p.player_id === room.winner_id) ?? null;
   const pendingWinnerRoomPlayer = players.find((p) => p.player_id === room.pending_winner_id) ?? null;
   const winnerCards = winnerRoomPlayer ? splitCards(winnerRoomPlayer.card) : [];
@@ -182,6 +187,10 @@ function RoomInner({
   useEffect(() => {
     setLocalAutoFill(Boolean(me?.auto_fill ?? true));
   }, [me?.auto_fill]);
+
+  useEffect(() => {
+    setManualMarked(me?.marked ?? [0]);
+  }, [me?.marked]);
 
   // Lobby countdown
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
@@ -303,22 +312,51 @@ function RoomInner({
   }
 
   async function handleAutoFillToggle(checked: boolean) {
+    if (checked === localAutoFill) return;
     try {
       setLocalAutoFill(checked);
-      const result = await api.setAutoFill(room.id, myPlayerId, checked);
-      console.log("Auto fill toggled:", result);
-      toast.success(checked ? `${t("globalAutoFill")} On` : `${t("globalAutoFill")} Off`);
+      await api.setAutoFill(room.id, myPlayerId, checked);
+      toast.success(checked ? "Auto marking enabled" : "Manual marking enabled", {
+        description: checked
+          ? "Called numbers will be marked for you."
+          : "Tap highlighted called numbers on your card.",
+      });
+      haptic("success");
     } catch (error) {
-      console.error("Auto fill toggle error:", error);
       setLocalAutoFill((prev) => !prev);
       toast.error(getErrorMessage(error));
     }
   }
 
   async function handleMarkNumber(n: number) {
-    await api.markNumber(room.id, myPlayerId, n).catch((error: unknown) => {
+    if (localAutoFill || room.status !== "live" || markingNumbers.has(n)) return;
+    const wasMarked = manualMarked.includes(n);
+    const shouldMark = !wasMarked;
+    setManualMarked((previous) =>
+      shouldMark
+        ? [...new Set([...previous, n])]
+        : previous.filter((value) => value === 0 || value !== n),
+    );
+    setMarkingNumbers((previous) => new Set(previous).add(n));
+    haptic(shouldMark ? "medium" : "light");
+
+    try {
+      await api.markNumber(room.id, myPlayerId, n, shouldMark);
+    } catch (error: unknown) {
+      setManualMarked((previous) =>
+        wasMarked
+          ? [...new Set([...previous, n])]
+          : previous.filter((value) => value === 0 || value !== n),
+      );
       toast.error(getErrorMessage(error));
-    });
+      haptic("error");
+    } finally {
+      setMarkingNumbers((previous) => {
+        const next = new Set(previous);
+        next.delete(n);
+        return next;
+      });
+    }
   }
 
   return (
@@ -452,28 +490,89 @@ function RoomInner({
             )}
           </div>
           {!isWatcher && myCards.length > 0 && (
-            <div className="flex items-center justify-between mb-2 rounded-lg bg-secondary/40 px-2.5 py-1.5">
-              <div className="text-[10px] font-semibold flex items-center gap-1.5">
-                <Radio className="h-3 w-3" /> {t("globalAutoFill")}
+            <div className="mb-3 rounded-2xl border border-border bg-card p-2 shadow-card">
+              <p className="mb-2 px-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                Marking mode
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAutoFillToggle(true)}
+                  aria-pressed={localAutoFill}
+                  className={cn(
+                    "flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-bold transition-colors",
+                    localAutoFill
+                      ? "border-primary bg-primary text-primary-foreground shadow-card"
+                      : "border-border bg-secondary/40 text-muted-foreground",
+                  )}
+                >
+                  <Zap className="h-4 w-4" /> Auto
+                  {localAutoFill && <Check className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAutoFillToggle(false)}
+                  aria-pressed={!localAutoFill}
+                  className={cn(
+                    "flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-bold transition-colors",
+                    !localAutoFill
+                      ? "border-accent bg-accent text-accent-foreground shadow-card"
+                      : "border-border bg-secondary/40 text-muted-foreground",
+                  )}
+                >
+                  <Hand className="h-4 w-4" /> Manual
+                  {!localAutoFill && <Check className="h-3.5 w-3.5" />}
+                </button>
               </div>
-              <Switch checked={localAutoFill} onCheckedChange={handleAutoFillToggle} />
+              <p className="mt-2 px-1 text-xs text-muted-foreground">
+                {localAutoFill
+                  ? "Called numbers are marked automatically."
+                  : room.status === "live"
+                    ? "Tap a highlighted called number to mark it. Tap again to undo."
+                    : "Manual marking becomes active when the game starts."}
+              </p>
             </div>
           )}
           {myCards.length > 0 ? (
-            <div className="grid grid-cols-2 gap-1.5">
-              {myCards.map((card, idx) => (
-                <CompactBingoCard
-                  key={idx}
-                  index={idx}
-                  numbers={card}
-                  marked={me.marked}
-                  current={current}
-                  called={called}
-                  onSelectNumber={handleMarkNumber}
-                  disabled={room.status !== "live" || isWatcher || localAutoFill}
-                />
-              ))}
-            </div>
+            localAutoFill ? (
+              <div className="grid grid-cols-2 gap-1.5">
+                {myCards.map((card, idx) => (
+                  <CompactBingoCard
+                    key={idx}
+                    index={idx}
+                    numbers={card}
+                    marked={manualMarked}
+                    current={current}
+                    called={called}
+                    disabled
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {manualBingoReady && (
+                  <div className="flex items-center gap-2 rounded-xl border border-success/40 bg-success/10 px-3 py-2 text-sm font-bold text-success">
+                    <Trophy className="h-4 w-4" />
+                    You have a completed line — tap BINGO!
+                  </div>
+                )}
+                {myCards.map((card, idx) => (
+                  <div key={idx}>
+                    <p className="mb-1.5 text-xs font-black uppercase tracking-wider text-muted-foreground">
+                      {t("cartela")} {idx + 1}
+                    </p>
+                    <BingoCard
+                      numbers={card}
+                      marked={manualMarked}
+                      current={current}
+                      called={called}
+                      onSelectNumber={handleMarkNumber}
+                      disabled={room.status !== "live" || isWatcher}
+                    />
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <BingoCard numbers={[]} marked={me.marked} current={current} called={called} disabled />
           )}

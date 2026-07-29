@@ -84,22 +84,30 @@ export function CompactBingoCard({
             const isFree = idx === 12;
             const isMarked = markedSet.has(n) || isFree;
             const isCurrent = !isFree && n === current;
-            const canSelect =
-              !disabled && !isFree && !isMarked && calledSet.has(n) && typeof onSelectNumber === "function";
+            const canToggle =
+              !disabled && !isFree && calledSet.has(n) && typeof onSelectNumber === "function";
 
             return (
               <button
                 key={idx}
                 type="button"
-                onClick={() => canSelect && onSelectNumber?.(n)}
-                disabled={!canSelect}
+                onClick={() => canToggle && onSelectNumber?.(n)}
+                disabled={!canToggle}
+                aria-label={
+                  isFree
+                    ? t("free")
+                    : canToggle
+                      ? `${isMarked ? "Unmark" : "Mark"} ${n}`
+                      : `Number ${n}`
+                }
+                aria-pressed={!isFree ? isMarked : undefined}
                 className={cn(
                   "aspect-square rounded-sm flex items-center justify-center font-bold text-[10px] transition-smooth",
                   isFree && "bg-secondary/60 text-[7px] text-muted-foreground",
                   !isFree && isMarked && "bg-secondary/50 text-foreground ring-2 ring-warning shadow-[0_0_6px_hsl(40_95%_60%/0.45)]",
                   !isFree && !isMarked && isCurrent && "bg-warning/20 text-warning ring-1 ring-warning",
                   !isFree && !isMarked && !isCurrent && "bg-secondary/30 text-foreground/80",
-                  canSelect && "ring-1 ring-accent/50 cursor-pointer",
+                  canToggle && "ring-1 ring-accent/50 cursor-pointer touch-manipulation",
                 )}
               >
                 {isFree ? "★" : n}

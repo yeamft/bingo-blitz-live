@@ -55,25 +55,32 @@ export function BingoCard({ numbers, marked, current, disabled, called = [], onS
           const isFree = idx === 12;
           const isMarked = markedSet.has(n) || isFree;
           const isCurrent = !isFree && n === current;
-          const canSelect =
+          const canToggle =
             !disabled &&
             !isFree &&
-            !isMarked &&
             calledSet.has(n) &&
             typeof onSelectNumber === "function";
           return (
             <button
               key={idx}
               type="button"
-              onClick={() => canSelect && onSelectNumber?.(n)}
-              disabled={!canSelect}
+              onClick={() => canToggle && onSelectNumber?.(n)}
+              disabled={!canToggle}
+              aria-label={
+                isFree
+                  ? t("free")
+                  : canToggle
+                    ? `${isMarked ? "Unmark" : "Mark"} ${n}`
+                    : `Number ${n}${calledSet.has(n) ? "" : ", not called yet"}`
+              }
+              aria-pressed={!isFree ? isMarked : undefined}
               className={cn(
-                "aspect-square rounded-lg flex items-center justify-center font-bold text-base border-2 transition-bounce",
+                "aspect-square min-h-12 rounded-lg flex items-center justify-center font-bold text-lg border-2 transition-bounce touch-manipulation",
                 isFree && "gradient-win text-accent-foreground border-transparent text-xs uppercase",
                 !isFree && isMarked && "gradient-primary text-primary-foreground border-transparent shadow-elegant scale-95",
                 !isFree && !isMarked && isCurrent && "bg-warning/20 text-warning border-warning animate-pulse",
                 !isFree && !isMarked && !isCurrent && "bg-secondary text-foreground border-border",
-                canSelect && "ring-2 ring-accent/60",
+                canToggle && "cursor-pointer ring-2 ring-accent/60 hover:scale-105 active:scale-90",
                 disabled && "opacity-80",
               )}
             >

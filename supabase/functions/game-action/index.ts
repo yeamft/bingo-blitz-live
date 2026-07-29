@@ -258,11 +258,10 @@ async function resolveUpsertIdentity(
   req: Request,
   args: Record<string, unknown>,
 ): Promise<{ telegram_id: string; username: string; phone: string | null }> {
-  const phone = normalizePhoneNumber(
-    typeof args.phone_number === "string" ? args.phone_number : null,
-  );
-
   if (isBotInternalRequest(req)) {
+    const phone = normalizePhoneNumber(
+      typeof args.phone_number === "string" ? args.phone_number : null,
+    );
     const telegram_id = typeof args.telegram_id === "string" ? args.telegram_id.trim().slice(0, 64) : "";
     const username = typeof args.username === "string" ? args.username.trim().slice(0, 32) : "";
     if (!telegram_id || !username) throw new Error("missing identity");
@@ -277,10 +276,14 @@ async function resolveUpsertIdentity(
   if (TELEGRAM_BOT_TOKEN) {
     if (!initData) throw new Error("Open the Mini App from Telegram to continue");
     const verified = await verifyTelegramWebAppInitData(initData);
-    return { ...verified, phone };
+    // Browser clients may resolve identity but cannot self-register a phone.
+    return { ...verified, phone: null };
   }
 
   // Local/dev fallback when TELEGRAM_BOT_TOKEN is not configured on the function.
+  const phone = normalizePhoneNumber(
+    typeof args.phone_number === "string" ? args.phone_number : null,
+  );
   const telegram_id = typeof args.telegram_id === "string" ? args.telegram_id.trim().slice(0, 64) : "";
   const username = typeof args.username === "string" ? args.username.trim().slice(0, 32) : "";
   if (!telegram_id || !username) throw new Error("missing identity");
@@ -570,10 +573,18 @@ async function recordTx(
   kind: "stake" | "payout" | "refund" | "seed" | "deposit" | "withdrawal" | "transfer_to_play" | "play_to_main" | "false_claim_penalty" | "admin_credit" | "admin_debit",
   amount: number,
   balance_after: number,
+  idempotency_key?: string,
 ) {
   await supabase
     .from("transactions")
-    .insert({ player_id, room_id, kind, amount, balance_after });
+    .insert({
+      player_id,
+      room_id,
+      kind,
+      amount,
+      balance_after,
+      ...(idempotency_key ? { idempotency_key } : {}),
+    });
 }
 
 async function getPlayerOrThrow(player_id: string) {
@@ -631,6 +642,15 @@ function parseMoneyValue(raw: unknown): number | null {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Normalized forms used for the single-use reference key (must match the DB unique index). */
+function normalizeProviderKey(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
+function normalizeReferenceKey(reference: string): string {
+  return reference.trim().toUpperCase();
 }
 
 function mapProviderToVerifyEtBank(provider: string): string {
@@ -706,6 +726,36 @@ function extractVerifiedAmount(payload: Record<string, unknown>): number | null 
   return null;
 }
 
+/**
+ * Verify.ET reports platform-wide reuse of a receipt through `confirmationHistory`.
+ * A receipt that was already confirmed before must never credit a wallet again,
+ * even if our own records were cleared.
+ */
+function extractConfirmationReuse(payload: Record<string, unknown>): {
+  reused: boolean;
+  confirmationCount: number | null;
+  firstConfirmedAt: string | null;
+} {
+  const data = payload.data;
+  const items = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+  const sources = [...items, payload.verification].filter(
+    (item): item is Record<string, unknown> => !!item && typeof item === "object",
+  );
+
+  for (const source of sources) {
+    const history = source.confirmationHistory as Record<string, unknown> | undefined;
+    if (!history || typeof history !== "object") continue;
+    const count = Number(history.confirmationCount);
+    return {
+      reused: history.confirmedBefore === true || history.isFirstConfirmation === false,
+      confirmationCount: Number.isFinite(count) ? count : null,
+      firstConfirmedAt: typeof history.firstConfirmedAt === "string" ? history.firstConfirmedAt : null,
+    };
+  }
+
+  return { reused: false, confirmationCount: null, firstConfirmedAt: null };
+}
+
 function isVerifyEtTerminal(payload: Record<string, unknown>): boolean {
   const processingStatus =
     (payload.data as Record<string, unknown> | undefined)?.processingStatus ??
@@ -774,7 +824,9 @@ async function verifyHostedDeposit(details: {
   if (!VERIFY_ET_API_KEY) throw new Error("Verify.ET API key not configured");
 
   const body = buildVerifyEtRequestBody(details);
-  const idempotencyKey = `bingo-${details.provider}-${details.reference}-${crypto.randomUUID()}`;
+  // Deterministic: retries for the same receipt reuse the same Verify.ET request
+  // instead of consuming a new verification credit or racing a second confirmation.
+  const idempotencyKey = `bingo-deposit-${normalizeProviderKey(details.provider)}-${normalizeReferenceKey(details.reference)}`;
 
   const response = await fetch(`${VERIFY_ET_BASE_URL}/api/verify?waitMs=${VERIFY_ET_WAIT_MS}`, {
     method: "POST",
@@ -805,6 +857,7 @@ async function verifyHostedDeposit(details: {
 
   assertVerifyEtSuccess(payload);
 
+  const confirmation = extractConfirmationReuse(payload);
   const amount = extractVerifiedAmount(payload);
   if (amount === null) {
     const verification = payload.verification as Record<string, unknown> | undefined;
@@ -814,12 +867,12 @@ async function verifyHostedDeposit(details: {
       (item as Record<string, unknown> | undefined)?.verified === true ||
       verification?.verified === true;
     if (verified) {
-      return { payload, amount: null };
+      return { payload, amount: null, confirmation };
     }
     throw new Error("Verify.ET response did not include a readable amount");
   }
 
-  return { payload, amount };
+  return { payload, amount, confirmation };
 }
 
 function sanitizeRoomName(value: unknown, isPrivate: boolean) {
@@ -1159,6 +1212,7 @@ Deno.serve(async (req: Request) => {
 
     switch (action) {
       case "upsert_player": {
+        const botRequest = isBotInternalRequest(req);
         let identity;
         try {
           identity = await resolveUpsertIdentity(req, args);
@@ -1171,7 +1225,7 @@ Deno.serve(async (req: Request) => {
         }
         const { telegram_id: tid, username: uname, phone } = identity;
         // Bot registration is phone-first: new accounts from the bot must include a phone.
-        if (isBotInternalRequest(req) && !phone) {
+        if (botRequest && !phone) {
           const { data: existingCheck } = await supabase
             .from("players")
             .select("id, phone_number")
@@ -1187,6 +1241,12 @@ Deno.serve(async (req: Request) => {
           .eq("telegram_id", tid)
           .maybeSingle();
         if (existing) {
+          if (TELEGRAM_BOT_TOKEN && !botRequest && !(existing as { phone_number?: string | null }).phone_number?.trim()) {
+            return json({
+              error: "Register in the Telegram bot first. Send /start and share your phone number.",
+              code: "REGISTRATION_REQUIRED",
+            }, 403);
+          }
           const updates: Record<string, string> = {};
           if (existing.username !== uname) {
             updates.username = uname;
@@ -1210,6 +1270,12 @@ Deno.serve(async (req: Request) => {
               updates.phone_number ?? (existing as { phone_number?: string | null }).phone_number;
           }
           return json({ player: normalizePlayerWallets(existing) });
+        }
+        if (TELEGRAM_BOT_TOKEN && !botRequest) {
+          return json({
+            error: "Register in the Telegram bot first. Send /start and share your phone number.",
+            code: "REGISTRATION_REQUIRED",
+          }, 403);
         }
         const { data, error } = await supabase
           .from("players")
@@ -1812,6 +1878,7 @@ Deno.serve(async (req: Request) => {
         const { room_id, player_id, auto_fill } = args;
         if (!room_id || !player_id)
           return json({ error: "missing fields" }, 400);
+        await ensurePlayerRegistered(String(player_id));
         await supabase
           .from("room_players")
           .update({ auto_fill: Boolean(auto_fill) })
@@ -1822,9 +1889,10 @@ Deno.serve(async (req: Request) => {
       }
 
       case "mark_number": {
-        const { room_id, player_id, number } = args;
+        const { room_id, player_id, number, marked: shouldMark = true } = args;
         if (!room_id || !player_id || !number)
           return json({ error: "missing fields" }, 400);
+        await ensurePlayerRegistered(String(player_id));
         const numeric = Number(number);
         const { data: room } = await supabase
           .from("rooms")
@@ -1843,11 +1911,16 @@ Deno.serve(async (req: Request) => {
           .maybeSingle();
         if (!rp || rp.role !== "player") return json({ error: "Not a player" }, 403);
         if (!rp.card.includes(numeric)) return json({ error: "Number not on your card" }, 400);
-        if (rp.marked.includes(numeric)) return json({ ok: true, already: true });
 
-        const marked = [...rp.marked, numeric];
+        const currentMarked = Array.isArray(rp.marked) ? rp.marked : [FREE];
+        const marked = shouldMark
+          ? [...new Set([...currentMarked, numeric])]
+          : currentMarked.filter((value: number) => value === FREE || value !== numeric);
         await supabase.from("room_players").update({ marked }).eq("id", rp.id);
-        return json({ ok: true });
+        await audit(room_id, player_id, shouldMark ? "manual_mark" : "manual_unmark", {
+          number: numeric,
+        });
+        return json({ ok: true, marked });
       }
 
       case "get_wallet_summary": {
@@ -2075,12 +2148,138 @@ Deno.serve(async (req: Request) => {
           return json({ error: "provider and reference are required for deposit verification" }, 400);
         }
 
-        const verification = await verifyHostedDeposit({
-          provider: String(provider),
-          reference: String(reference).trim(),
-          account_suffix: typeof account_suffix === "string" ? account_suffix.trim() : undefined,
-          phone_number: typeof phone_number === "string" ? phone_number.trim() : undefined,
-        });
+        const providerKey = normalizeProviderKey(String(provider));
+        const referenceKey = normalizeReferenceKey(String(reference));
+        if (!providerKey || !referenceKey) {
+          return json({ error: "provider and reference are required for deposit verification" }, 400);
+        }
+
+        const suffixValue = typeof account_suffix === "string" ? account_suffix.trim() : "";
+        const phoneValue = typeof phone_number === "string" ? phone_number.trim() : "";
+
+        const referenceUsedResponse = () =>
+          json(
+            {
+              error: "This payment reference has already been verified. Each receipt can only be used once.",
+              code: "REFERENCE_ALREADY_USED",
+            },
+            409,
+          );
+
+        const { data: priorUse } = await supabase
+          .from("wallet_requests")
+          .select("id, player_id, status, created_at")
+          .eq("kind", "deposit")
+          .eq("provider", providerKey)
+          .eq("provider_reference", referenceKey)
+          .limit(1)
+          .maybeSingle();
+
+        if (priorUse) {
+          await audit(null, String(player_id), "deposit_reference_reuse_blocked", {
+            provider: providerKey,
+            reference: referenceKey,
+            existing_request_id: (priorUse as { id?: number | string }).id ?? null,
+            stage: "pre_check",
+          });
+          return referenceUsedResponse();
+        }
+
+        const requestNote = [
+          `provider=${providerKey}`,
+          `reference=${referenceKey}`,
+          suffixValue ? `suffix=${suffixValue}` : null,
+          phoneValue ? `phone=${phoneValue}` : null,
+          note ? `note=${String(note).slice(0, 120)}` : null,
+        ].filter(Boolean).join(" | ");
+
+        // Claim the reference before contacting Verify.ET. The unique index on
+        // (provider, provider_reference) makes concurrent submissions of the same
+        // receipt fail here instead of double-crediting the wallet.
+        const { data: claim, error: claimError } = await supabase
+          .from("wallet_requests")
+          .insert({
+            player_id,
+            kind: "deposit",
+            amount: numericAmount,
+            status: "pending",
+            note: requestNote.slice(0, 240),
+            provider: providerKey,
+            provider_reference: referenceKey,
+            account_suffix: suffixValue || null,
+            phone_number: phoneValue || null,
+          })
+          .select("*")
+          .single();
+
+        if (claimError || !claim) {
+          if (claimError?.code === "23505") {
+            await audit(null, String(player_id), "deposit_reference_reuse_blocked", {
+              provider: providerKey,
+              reference: referenceKey,
+              stage: "insert_conflict",
+            });
+            return referenceUsedResponse();
+          }
+          if (claimError?.code === "42703" || claimError?.code === "PGRST204") {
+            return json({
+              error: "Deposit verification is not configured. Apply the latest database migrations.",
+              code: "MIGRATION_REQUIRED",
+            }, 500);
+          }
+          return json({ error: claimError?.message || "Could not start deposit verification" }, 500);
+        }
+
+        const claimId = (claim as { id: number | string }).id;
+
+        const releaseClaim = async (reason: string) => {
+          await supabase
+            .from("wallet_requests")
+            .delete()
+            .eq("id", claimId)
+            .eq("status", "pending");
+          await audit(null, String(player_id), "deposit_verification_failed", {
+            provider: providerKey,
+            reference: referenceKey,
+            reason: reason.slice(0, 240),
+          });
+        };
+
+        let verification: Awaited<ReturnType<typeof verifyHostedDeposit>>;
+        try {
+          verification = await verifyHostedDeposit({
+            provider: providerKey,
+            reference: String(reference).trim(),
+            account_suffix: suffixValue || undefined,
+            phone_number: phoneValue || undefined,
+          });
+        } catch (verifyError) {
+          const message = verifyError instanceof Error ? verifyError.message : String(verifyError);
+          // Nothing was credited, so the reference stays available for a corrected retry.
+          await releaseClaim(message);
+          return json({ error: message, code: "VERIFICATION_FAILED" }, 400);
+        }
+
+        if (verification.confirmation.reused) {
+          await supabase
+            .from("wallet_requests")
+            .update({
+              status: "rejected",
+              lifecycle_status: "rejected",
+              rejection_reason: "Receipt already confirmed on Verify.ET",
+              processed_at: new Date().toISOString(),
+              verification_payload: verification.payload,
+            })
+            .eq("id", claimId);
+          await audit(null, String(player_id), "deposit_reference_reuse_blocked", {
+            provider: providerKey,
+            reference: referenceKey,
+            stage: "provider_confirmation_history",
+            confirmation_count: verification.confirmation.confirmationCount,
+            first_confirmed_at: verification.confirmation.firstConfirmedAt,
+          });
+          return referenceUsedResponse();
+        }
 
         let verifiedAmount = verification.amount !== null
           ? Math.trunc(Number(verification.amount) || 0)
@@ -2089,42 +2288,48 @@ Deno.serve(async (req: Request) => {
           verifiedAmount = numericAmount;
         }
         if (verifiedAmount <= 0) {
+          await releaseClaim("verified amount is invalid");
           return json({ error: "verified amount is invalid" }, 400);
         }
         if (verification.amount !== null && verifiedAmount !== numericAmount) {
-          return json({ error: `verified amount ${verifiedAmount} does not match requested amount ${numericAmount}` }, 400);
+          const message = `verified amount ${verifiedAmount} does not match requested amount ${numericAmount}`;
+          await releaseClaim(message);
+          return json({ error: message }, 400);
         }
-
-        const requestNote = [
-          `provider=${String(provider)}`,
-          `reference=${String(reference).trim()}`,
-          account_suffix ? `suffix=${String(account_suffix).trim()}` : null,
-          phone_number ? `phone=${String(phone_number).trim()}` : null,
-          note ? `note=${String(note).slice(0, 120)}` : null,
-        ].filter(Boolean).join(" | ");
 
         const { data: request, error } = await supabase
           .from("wallet_requests")
-          .insert({
-            player_id,
-            kind: "deposit",
-            amount: numericAmount,
+          .update({
             status: "approved",
-            note: requestNote.slice(0, 240),
+            lifecycle_status: "credited",
             processed_at: new Date().toISOString(),
+            verified_amount: verifiedAmount,
+            verification_payload: verification.payload,
           })
+          .eq("id", claimId)
+          .eq("status", "pending")
           .select("*")
-          .single();
+          .maybeSingle();
+
+        // A concurrent request already settled this claim; never credit twice.
         if (error) return json({ error: error.message }, 500);
+        if (!request) return referenceUsedResponse();
 
         const nextMain = player.main_wallet_balance + numericAmount;
         await updatePlayerWallets(player.id, { main_wallet_balance: nextMain });
-        await recordTx(player.id, null, "deposit", numericAmount, nextMain);
+        await recordTx(
+          player.id,
+          null,
+          "deposit",
+          numericAmount,
+          nextMain,
+          `deposit:${providerKey}:${referenceKey}`,
+        );
 
         await audit(null, String(player_id), "request_deposit_verified", {
           amount: numericAmount,
-          provider,
-          reference,
+          provider: providerKey,
+          reference: referenceKey,
           verification: verification.payload,
         });
         return json({ ok: true, request, verified: true, summary: { credited_amount: numericAmount } });

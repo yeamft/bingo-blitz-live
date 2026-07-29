@@ -36,6 +36,7 @@ type IdentityState = {
   loading: boolean;
   error: string | null;
   offline: boolean;
+  registrationRequired: boolean;
   needsPhoneNumber: boolean;
   isRegistered: boolean;
   fromTelegram: boolean;
@@ -71,7 +72,7 @@ function buildLocalPlayer(telegram_id: string, username: string, phone?: string 
         return {
           ...parsed,
           username,
-          phone_number: phone ?? parsed.phone_number,
+          phone_number: phone ?? parsed.phone_number ?? "dev-registered",
         };
       }
     } catch {
@@ -83,7 +84,7 @@ function buildLocalPlayer(telegram_id: string, username: string, phone?: string 
     id: `local-${telegram_id}`,
     telegram_id,
     username,
-    phone_number: phone ?? null,
+    phone_number: phone ?? "dev-registered",
     wallet_balance: 5000,
     main_wallet_balance: 5000,
     play_wallet_balance: 5000,
@@ -136,6 +137,7 @@ function useTelegramIdentityState(): IdentityState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const [registrationRequired, setRegistrationRequired] = useState(false);
   const [identity, setIdentity] = useState<{
     telegram_id: string;
     username: string;
@@ -168,6 +170,7 @@ function useTelegramIdentityState(): IdentityState {
           setPlayer(player);
           setError(null);
           setOffline(false);
+          setRegistrationRequired(false);
           saveLocalPlayer(player);
         }
       } catch (err: unknown) {
@@ -178,8 +181,10 @@ function useTelegramIdentityState(): IdentityState {
             setOffline(true);
             setError(null);
           } else {
+            const message = getErrorMessage(err);
             setPlayer(null);
-            setError(getErrorMessage(err));
+            setRegistrationRequired(message.toLowerCase().includes("register in the telegram bot"));
+            setError(message);
           }
         }
       } finally {
@@ -202,6 +207,7 @@ function useTelegramIdentityState(): IdentityState {
       );
       setPlayer(updated);
       setOffline(false);
+      setRegistrationRequired(false);
       saveLocalPlayer(updated);
       return updated;
     } catch (err) {
@@ -227,6 +233,7 @@ function useTelegramIdentityState(): IdentityState {
       );
       setPlayer(updated);
       setOffline(false);
+      setRegistrationRequired(false);
       saveLocalPlayer(updated);
       return updated;
     } catch {
@@ -252,7 +259,8 @@ function useTelegramIdentityState(): IdentityState {
     loading,
     error,
     offline,
-    needsPhoneNumber: Boolean(player && !player.phone_number?.trim()),
+    registrationRequired,
+    needsPhoneNumber: registrationRequired || Boolean(player && !player.phone_number?.trim()),
     isRegistered: Boolean(player?.phone_number?.trim()),
     fromTelegram: Boolean(identity?.fromTelegram),
     completePhoneRegistration,

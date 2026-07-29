@@ -18,11 +18,11 @@ import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
  */
 export function PhoneGate() {
   const location = useLocation();
-  const { player, loading, needsPhoneNumber, refreshPlayer, fromTelegram } = useTelegramIdentity();
+  const { loading, needsPhoneNumber, refreshPlayer, fromTelegram } = useTelegramIdentity();
   const [refreshing, setRefreshing] = useState(false);
 
   if (location.pathname.startsWith("/admin")) return null;
-  if (loading || !player || !needsPhoneNumber) return null;
+  if (loading || !needsPhoneNumber) return null;
 
   async function handleRefresh() {
     setRefreshing(true);

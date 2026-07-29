@@ -420,8 +420,8 @@ export const api = {
   callNext: (room_id: string) => call("call_next", { room_id }),
   setAutoFill: (room_id: string, player_id: string, auto_fill: boolean) =>
     call("set_auto_fill", { room_id, player_id, auto_fill }),
-  markNumber: (room_id: string, player_id: string, number: number) =>
-    call("mark_number", { room_id, player_id, number }),
+  markNumber: (room_id: string, player_id: string, number: number, marked = true) =>
+    call("mark_number", { room_id, player_id, number, marked }),
   verifyBingo: (room_id: string, host_player_id: string, approve = true) =>
     call("verify_bingo", { room_id, host_player_id, approve }),
   claimBingo: (room_id: string, player_id: string) =>
