@@ -12,7 +12,7 @@ declare const Deno: {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+    "authorization, x-client-info, apikey, content-type, x-telegram-init-data, x-bot-internal-secret",
 };
 
 const supabase = createClient(
@@ -35,6 +35,12 @@ const VERIFY_ET_WAIT_MS = Math.max(
   Math.min(15000, Number(Deno.env.get("VERIFY_ET_WAIT_MS") || "8000") || 8000),
 );
 const WORKER_SECRET = Deno.env.get("WORKER_SECRET") || "";
+const BOT_INTERNAL_SECRET = Deno.env.get("BOT_INTERNAL_SECRET") || "";
+const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || Deno.env.get("BOT_TOKEN") || "";
+const TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = Math.max(
+  60,
+  Number(Deno.env.get("TELEGRAM_INIT_DATA_MAX_AGE_SECONDS") || "86400") || 86400,
+);
 const SESSION_TTL_HOURS = 24;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 120;
@@ -152,6 +158,133 @@ async function checkRateLimit(scope: string, identifier: string): Promise<void> 
 function requireWorkerSecret(args: Record<string, unknown>): void {
   if (!WORKER_SECRET) return; // unset = open (dev only)
   if (args.worker_secret !== WORKER_SECRET) throw new Error("Unauthorized worker");
+}
+
+function isBotInternalRequest(req: Request): boolean {
+  if (!BOT_INTERNAL_SECRET) return false;
+  const provided = req.headers.get("x-bot-internal-secret") || "";
+  if (provided.length !== BOT_INTERNAL_SECRET.length) return false;
+  let out = 0;
+  for (let i = 0; i < provided.length; i++) {
+    out |= provided.charCodeAt(i) ^ BOT_INTERNAL_SECRET.charCodeAt(i);
+  }
+  return out === 0;
+}
+
+function normalizePhoneNumber(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  let digits = raw.replace(/[^\d+]/g, "");
+  if (digits.startsWith("+")) digits = digits.slice(1);
+  if (digits.startsWith("0") && digits.length === 10) digits = `251${digits.slice(1)}`;
+  if (digits.startsWith("9") && digits.length === 9) digits = `251${digits}`;
+  if (!/^\d{9,15}$/.test(digits)) return null;
+  return digits.slice(0, 32);
+}
+
+async function verifyTelegramWebAppInitData(initData: string): Promise<{
+  telegram_id: string;
+  username: string;
+}> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    throw new Error("Telegram bot token is not configured on the server");
+  }
+  if (!initData?.trim()) throw new Error("Missing Telegram init data");
+
+  const params = new URLSearchParams(initData);
+  const hash = params.get("hash");
+  if (!hash) throw new Error("Invalid Telegram init data");
+  params.delete("hash");
+
+  const dataCheckString = [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+
+  const encoder = new TextEncoder();
+  const webAppKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode("WebAppData"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const secretKeyBytes = await crypto.subtle.sign(
+    "HMAC",
+    webAppKey,
+    encoder.encode(TELEGRAM_BOT_TOKEN),
+  );
+  const signingKey = await crypto.subtle.importKey(
+    "raw",
+    secretKeyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    signingKey,
+    encoder.encode(dataCheckString),
+  );
+  const calculated = bytesToHex(new Uint8Array(signature));
+  if (calculated !== hash) throw new Error("Invalid Telegram signature");
+
+  const authDate = Number(params.get("auth_date") || "0");
+  if (!authDate || Date.now() / 1000 - authDate > TELEGRAM_INIT_DATA_MAX_AGE_SECONDS) {
+    throw new Error("Telegram session expired. Reopen the app from the bot.");
+  }
+
+  const userRaw = params.get("user");
+  if (!userRaw) throw new Error("Telegram user missing from init data");
+  let user: { id?: number; username?: string; first_name?: string; last_name?: string };
+  try {
+    user = JSON.parse(userRaw);
+  } catch {
+    throw new Error("Invalid Telegram user payload");
+  }
+  if (!user?.id) throw new Error("Telegram user id missing");
+
+  const username =
+    user.username ||
+    [user.first_name, user.last_name].filter(Boolean).join(" ") ||
+    `Player${user.id}`;
+
+  return {
+    telegram_id: String(user.id).slice(0, 64),
+    username: String(username).slice(0, 32),
+  };
+}
+
+async function resolveUpsertIdentity(
+  req: Request,
+  args: Record<string, unknown>,
+): Promise<{ telegram_id: string; username: string; phone: string | null }> {
+  const phone = normalizePhoneNumber(
+    typeof args.phone_number === "string" ? args.phone_number : null,
+  );
+
+  if (isBotInternalRequest(req)) {
+    const telegram_id = typeof args.telegram_id === "string" ? args.telegram_id.trim().slice(0, 64) : "";
+    const username = typeof args.username === "string" ? args.username.trim().slice(0, 32) : "";
+    if (!telegram_id || !username) throw new Error("missing identity");
+    return { telegram_id, username, phone };
+  }
+
+  const initData =
+    (typeof args.telegram_init_data === "string" && args.telegram_init_data) ||
+    req.headers.get("x-telegram-init-data") ||
+    "";
+
+  if (TELEGRAM_BOT_TOKEN) {
+    if (!initData) throw new Error("Open the Mini App from Telegram to continue");
+    const verified = await verifyTelegramWebAppInitData(initData);
+    return { ...verified, phone };
+  }
+
+  // Local/dev fallback when TELEGRAM_BOT_TOKEN is not configured on the function.
+  const telegram_id = typeof args.telegram_id === "string" ? args.telegram_id.trim().slice(0, 64) : "";
+  const username = typeof args.username === "string" ? args.username.trim().slice(0, 32) : "";
+  if (!telegram_id || !username) throw new Error("missing identity");
+  return { telegram_id, username, phone };
 }
 
 function settingValueToString(value: unknown, fallback = ""): string {
@@ -1017,14 +1150,28 @@ Deno.serve(async (req: Request) => {
 
     switch (action) {
       case "upsert_player": {
-        const { telegram_id, username, phone_number } = args;
-        if (!telegram_id || !username)
-          return json({ error: "missing identity" }, 400);
-        const tid = String(telegram_id).slice(0, 64);
-        const uname = String(username).slice(0, 32);
-        const phone = typeof phone_number === "string" && phone_number.trim()
-          ? phone_number.trim().slice(0, 32)
-          : null;
+        let identity;
+        try {
+          identity = await resolveUpsertIdentity(req, args);
+        } catch (identityError) {
+          const message = identityError instanceof Error ? identityError.message : "identity error";
+          const status = message.toLowerCase().includes("missing") || message.toLowerCase().includes("open the mini app")
+            ? 401
+            : 403;
+          return json({ error: message }, status);
+        }
+        const { telegram_id: tid, username: uname, phone } = identity;
+        // Bot registration is phone-first: new accounts from the bot must include a phone.
+        if (isBotInternalRequest(req) && !phone) {
+          const { data: existingCheck } = await supabase
+            .from("players")
+            .select("id, phone_number")
+            .eq("telegram_id", tid)
+            .maybeSingle();
+          if (!existingCheck?.phone_number) {
+            return json({ error: "phone number required for registration" }, 400);
+          }
+        }
         const { data: existing } = await supabase
           .from("players")
           .select("*")
@@ -1039,12 +1186,19 @@ Deno.serve(async (req: Request) => {
             updates.phone_number = phone;
           }
           if (Object.keys(updates).length > 0) {
-            await supabase
+            const { error: updateError } = await supabase
               .from("players")
               .update(updates)
               .eq("id", existing.id);
+            if (updateError) {
+              if (String(updateError.message).toLowerCase().includes("phone")) {
+                return json({ error: "That phone number is already registered to another account" }, 409);
+              }
+              return json({ error: updateError.message }, 500);
+            }
             existing.username = updates.username ?? existing.username;
-            (existing as { phone_number?: string | null }).phone_number = updates.phone_number ?? (existing as { phone_number?: string | null }).phone_number;
+            (existing as { phone_number?: string | null }).phone_number =
+              updates.phone_number ?? (existing as { phone_number?: string | null }).phone_number;
           }
           return json({ player: normalizePlayerWallets(existing) });
         }
@@ -1053,7 +1207,12 @@ Deno.serve(async (req: Request) => {
           .insert({ telegram_id: tid, username: uname, phone_number: phone })
           .select()
           .single();
-        if (error) return json({ error: error.message }, 500);
+        if (error) {
+          if (String(error.message).toLowerCase().includes("phone")) {
+            return json({ error: "That phone number is already registered to another account" }, 409);
+          }
+          return json({ error: error.message }, 500);
+        }
         const seeded = normalizePlayerWallets(data);
         await updatePlayerWallets(data.id, {
           main_wallet_balance: seeded.main_wallet_balance,

@@ -12,6 +12,14 @@ See [`docs/AUDIT.md`](./AUDIT.md) for feature-by-feature status.
 
 ## Completed in production-readiness pass (2026-07-29)
 
+### Telegram bot + registration
+- Production webhook Edge Function: `supabase/functions/telegram-bot`
+- Phone-first `/start`: own shared contact required before account creation
+- Mini App `initData` HMAC verification in `game-action` `upsert_player`
+- Bot → game-action auth via `x-bot-internal-secret`
+- Shared `TelegramIdentityProvider` + blocking `PhoneGate` until phone is set
+- Ops guide: `docs/TELEGRAM_BOT.md`
+
 ### Theme system
 - Light theme as CSS `:root` default; dark via `.dark` class
 - `ThemeProvider` (next-themes) with localStorage persistence

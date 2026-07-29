@@ -384,8 +384,18 @@ export type GameHistoryEntry = {
 };
 
 export const api = {
-  upsertPlayer: (telegram_id: string, username: string, phone_number?: string) =>
-    call<{ player: Player }>("upsert_player", { telegram_id, username, phone_number }),
+  upsertPlayer: (
+    telegram_id: string,
+    username: string,
+    phone_number?: string,
+    telegram_init_data?: string,
+  ) =>
+    call<{ player: Player }>("upsert_player", {
+      telegram_id,
+      username,
+      phone_number,
+      telegram_init_data,
+    }),
   createRoom: (
     player_id: string,
     stake_amount = 20,

@@ -1,82 +1,110 @@
-/**
- * Local DEV Telegram polling runner for Yegara Bingo.
- *
- * Production uses the Supabase Edge Function webhook:
- *   supabase/functions/telegram-bot
- *
- * This process only starts when BOT_POLLING=1 (or NODE_ENV is not production).
- * Do not run it against the same bot token that already has a webhook set.
- */
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import express from "express";
+// Production Telegram bot webhook for Yegara Bingo.
+// Phone-first registration: /start requires the user's own shared contact before account creation.
+declare const Deno: {
+  env: { get(key: string): string | undefined };
+  serve(handler: (req: Request) => Response | Promise<Response>): void;
+};
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-function loadEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) return;
-  const raw = fs.readFileSync(filePath, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIndex = trimmed.indexOf("=");
-    if (eqIndex === -1) continue;
-    const key = trimmed.slice(0, eqIndex).trim();
-    let value = trimmed.slice(eqIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
-
-loadEnvFile(path.resolve(__dirname, ".env"));
-loadEnvFile(path.resolve(__dirname, "..", ".env"));
-
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const BOT_INTERNAL_SECRET = process.env.BOT_INTERNAL_SECRET || "";
-const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || process.env.APP_URL || "";
+const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || Deno.env.get("BOT_TOKEN") || "";
+const TELEGRAM_WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || "";
+const BOT_INTERNAL_SECRET = Deno.env.get("BOT_INTERNAL_SECRET") || "";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const MINI_APP_URL = (
+  Deno.env.get("TELEGRAM_MINI_APP_URL") ||
+  Deno.env.get("APP_URL") ||
+  ""
+).trim();
 const SUPPORT_CONTACT =
-  process.env.TELEGRAM_SUPPORT_CONTACT || process.env.SUPPORT_CONTACT || "@yegarabingo_support";
-const PORT = Number(process.env.PORT || 3000);
-const ALLOW_POLLING =
-  process.env.BOT_POLLING === "1" ||
-  (process.env.NODE_ENV !== "production" && process.env.BOT_POLLING !== "0");
+  Deno.env.get("TELEGRAM_SUPPORT_CONTACT") ||
+  Deno.env.get("SUPPORT_CONTACT") ||
+  "@yegarabingo_support";
 
-if (!TELEGRAM_BOT_TOKEN) throw new Error("Missing TELEGRAM_BOT_TOKEN in environment.");
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error("Missing VITE_SUPABASE_URL or Supabase key in environment.");
+const TELEGRAM_API = TELEGRAM_BOT_TOKEN
+  ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`
+  : "";
+
+type TgUser = {
+  id: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+};
+
+type TgContact = {
+  phone_number: string;
+  user_id?: number;
+  first_name?: string;
+};
+
+type TgMessage = {
+  message_id: number;
+  chat: { id: number };
+  from?: TgUser;
+  text?: string;
+  contact?: TgContact;
+};
+
+type TgCallbackQuery = {
+  id: string;
+  from: TgUser;
+  data?: string;
+  message?: { chat: { id: number } };
+};
+
+type TgUpdate = {
+  update_id: number;
+  message?: TgMessage;
+  callback_query?: TgCallbackQuery;
+};
+
+type Player = {
+  id: string;
+  telegram_id: string;
+  username: string;
+  phone_number?: string | null;
+};
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let out = 0;
+  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return out === 0;
+}
 
-async function telegram(method, body) {
+async function telegram(method: string, body: Record<string, unknown>) {
+  if (!TELEGRAM_API) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
   const res = await fetch(`${TELEGRAM_API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!data.ok) throw new Error(data.description || `Telegram API error on ${method}`);
+  if (!data.ok) {
+    throw new Error(data.description || `Telegram API error on ${method}`);
+  }
   return data.result;
 }
 
-async function callGameAction(action, args = {}) {
-  const headers = {
+async function callGameAction(action: string, args: Record<string, unknown> = {}) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Supabase credentials are not configured");
+  }
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    apikey: SUPABASE_KEY,
-    Authorization: `Bearer ${SUPABASE_KEY}`,
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
   };
-  if (BOT_INTERNAL_SECRET) headers["x-bot-internal-secret"] = BOT_INTERNAL_SECRET;
+  if (BOT_INTERNAL_SECRET) {
+    headers["x-bot-internal-secret"] = BOT_INTERNAL_SECRET;
+  }
 
   const res = await fetch(`${SUPABASE_URL}/functions/v1/game-action`, {
     method: "POST",
@@ -85,12 +113,12 @@ async function callGameAction(action, args = {}) {
   });
   const data = await res.json();
   if (!res.ok || data?.error) {
-    throw new Error(data?.error || `Supabase function error (${res.status})`);
+    throw new Error(data?.error || `game-action error (${res.status})`);
   }
   return data;
 }
 
-function getIdentity(user) {
+function getIdentity(user: TgUser | undefined) {
   if (!user?.id) throw new Error("Telegram user not found.");
   return {
     telegram_id: String(user.id),
@@ -101,8 +129,8 @@ function getIdentity(user) {
   };
 }
 
-function normalizePhone(raw) {
-  let digits = String(raw || "").replace(/[^\d+]/g, "");
+function normalizePhone(raw: string): string | null {
+  let digits = raw.replace(/[^\d+]/g, "");
   if (digits.startsWith("+")) digits = digits.slice(1);
   if (digits.startsWith("0") && digits.length === 10) digits = `251${digits.slice(1)}`;
   if (digits.startsWith("9") && digits.length === 9) digits = `251${digits}`;
@@ -136,7 +164,9 @@ function phoneKeyboard() {
   };
 }
 
-function welcomeRegistered(player, summary) {
+function welcomeRegistered(player: Player, summary: {
+  summary: { play_wallet_balance: number; main_wallet_balance: number; total_balance: number };
+}) {
   return [
     `👋 Welcome back, ${player.username}!`,
     "",
@@ -148,7 +178,7 @@ function welcomeRegistered(player, summary) {
   ].join("\n");
 }
 
-function welcomeNeedsPhone(username) {
+function welcomeNeedsPhone(username: string) {
   return [
     `👋 Hi ${username}!`,
     "",
@@ -171,7 +201,7 @@ function instructionsText() {
   ].join("\n");
 }
 
-async function findPlayer(user) {
+async function findPlayer(user: TgUser): Promise<Player | null> {
   const identity = getIdentity(user);
   const { player } = await callGameAction("get_player_by_telegram", {
     telegram_id: identity.telegram_id,
@@ -179,7 +209,7 @@ async function findPlayer(user) {
   return player ?? null;
 }
 
-async function registerWithPhone(user, phoneNumber) {
+async function registerWithPhone(user: TgUser, phoneNumber: string): Promise<Player> {
   const identity = getIdentity(user);
   const phone = normalizePhone(phoneNumber);
   if (!phone) throw new Error("That phone number looks invalid. Please share again.");
@@ -190,9 +220,10 @@ async function registerWithPhone(user, phoneNumber) {
   return player;
 }
 
-async function sendStart(chatId, user) {
+async function sendStart(chatId: number, user: TgUser) {
   const identity = getIdentity(user);
   const player = await findPlayer(user);
+
   if (player?.phone_number?.trim()) {
     const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
     await telegram("sendMessage", {
@@ -202,6 +233,7 @@ async function sendStart(chatId, user) {
     });
     return;
   }
+
   await telegram("sendMessage", {
     chat_id: chatId,
     text: welcomeNeedsPhone(identity.username),
@@ -209,17 +241,10 @@ async function sendStart(chatId, user) {
   });
 }
 
-async function requireRegistered(user) {
-  const player = await findPlayer(user);
-  if (!player?.phone_number?.trim()) {
-    throw new Error("Share your phone number first to finish registration.");
-  }
-  return player;
-}
-
-async function handleContact(message) {
+async function handleContact(message: TgMessage) {
   const chatId = message.chat.id;
   const user = message.from;
+  if (!user) return;
   const contact = message.contact;
   if (!contact?.phone_number) {
     await telegram("sendMessage", {
@@ -237,6 +262,7 @@ async function handleContact(message) {
     });
     return;
   }
+
   const player = await registerWithPhone(user, contact.phone_number);
   const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
   await telegram("sendMessage", {
@@ -251,14 +277,25 @@ async function handleContact(message) {
   });
 }
 
-async function handleCommand(message) {
+async function requireRegistered(user: TgUser): Promise<Player> {
+  const player = await findPlayer(user);
+  if (!player?.phone_number?.trim()) {
+    throw new Error("Share your phone number first to finish registration.");
+  }
+  return player;
+}
+
+async function handleMessage(message: TgMessage) {
   const chatId = message.chat.id;
   const user = message.from;
+  if (!user) return;
+
   try {
     if (message.contact) {
       await handleContact(message);
       return;
     }
+
     const text = (message.text || "").trim();
     const command = text.split(/\s+/)[0]?.split("@")[0] || "";
 
@@ -266,6 +303,7 @@ async function handleCommand(message) {
       await sendStart(chatId, user);
       return;
     }
+
     if (command === "/balance") {
       const player = await requireRegistered(user);
       const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
@@ -281,22 +319,24 @@ async function handleCommand(message) {
       });
       return;
     }
+
     if (command === "/play") {
-      await requireRegistered(user);
+      const player = await requireRegistered(user);
       if (!MINI_APP_URL) {
         await telegram("sendMessage", {
           chat_id: chatId,
-          text: "Mini App URL is not configured. Set TELEGRAM_MINI_APP_URL to your HTTPS app URL.",
+          text: "Mini App URL is not configured yet. Set TELEGRAM_MINI_APP_URL.",
         });
         return;
       }
       await telegram("sendMessage", {
         chat_id: chatId,
-        text: "Tap Play to open Bingo.",
+        text: `Ready, ${player.username}. Tap Play to open Bingo.`,
         reply_markup: { inline_keyboard: [[playButton()]] },
       });
       return;
     }
+
     if (command === "/instructions" || command === "/help") {
       await telegram("sendMessage", {
         chat_id: chatId,
@@ -305,6 +345,7 @@ async function handleCommand(message) {
       });
       return;
     }
+
     if (command === "/support") {
       await telegram("sendMessage", {
         chat_id: chatId,
@@ -313,6 +354,7 @@ async function handleCommand(message) {
       });
       return;
     }
+
     if (command === "/deposit" || command === "/withdraw" || command === "/withdrawal") {
       await telegram("sendMessage", {
         chat_id: chatId,
@@ -321,22 +363,24 @@ async function handleCommand(message) {
       });
       return;
     }
+
     await sendStart(chatId, user);
   } catch (error) {
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: `❌ ${error.message || "Something went wrong"}`,
+      text: `❌ ${error instanceof Error ? error.message : "Something went wrong"}`,
     });
   }
 }
 
-async function handleCallbackQuery(callbackQuery) {
-  const chatId = callbackQuery.message?.chat?.id;
+async function handleCallback(callback: TgCallbackQuery) {
+  const chatId = callback.message?.chat?.id;
   if (!chatId) return;
+
   try {
-    const data = callbackQuery.data || "";
+    const data = callback.data || "";
     if (data === "balance") {
-      const player = await requireRegistered(callbackQuery.from);
+      const player = await requireRegistered(callback.from);
       const summary = await callGameAction("get_wallet_summary", { player_id: player.id });
       await telegram("sendMessage", {
         chat_id: chatId,
@@ -349,9 +393,12 @@ async function handleCallbackQuery(callbackQuery) {
         reply_markup: registeredMenuMarkup(),
       });
     } else if (data === "play") {
-      await requireRegistered(callbackQuery.from);
+      await requireRegistered(callback.from);
       if (!MINI_APP_URL) {
-        await telegram("sendMessage", { chat_id: chatId, text: "Mini App URL is not configured yet." });
+        await telegram("sendMessage", {
+          chat_id: chatId,
+          text: "Mini App URL is not configured yet.",
+        });
       } else {
         await telegram("sendMessage", {
           chat_id: chatId,
@@ -372,59 +419,56 @@ async function handleCallbackQuery(callbackQuery) {
         reply_markup: registeredMenuMarkup(),
       });
     } else if (data === "register") {
-      await sendStart(chatId, callbackQuery.from);
+      await sendStart(chatId, callback.from);
     }
   } catch (error) {
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: `❌ ${error.message || "Something went wrong"}`,
+      text: `❌ ${error instanceof Error ? error.message : "Something went wrong"}`,
     });
   } finally {
-    await telegram("answerCallbackQuery", { callback_query_id: callbackQuery.id });
+    await telegram("answerCallbackQuery", { callback_query_id: callback.id });
   }
 }
 
-async function poll() {
-  let offset = 0;
-  console.log("DEV polling started. Prefer the Supabase telegram-bot webhook in production.");
-  while (true) {
-    try {
-      const res = await fetch(`${TELEGRAM_API}/getUpdates?timeout=30&offset=${offset}`);
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.description || "Failed to get updates");
-      for (const update of data.result) {
-        offset = update.update_id + 1;
-        if (update.message?.text || update.message?.contact) await handleCommand(update.message);
-        if (update.callback_query) await handleCallbackQuery(update.callback_query);
-      }
-    } catch (error) {
-      console.error("Bot polling error:", error);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+Deno.serve(async (req: Request) => {
+  if (req.method === "GET") {
+    return json({
+      ok: true,
+      service: "yegara-bingo-telegram-bot",
+      miniAppConfigured: Boolean(MINI_APP_URL),
+    });
+  }
+
+  if (req.method !== "POST") {
+    return json({ error: "method not allowed" }, 405);
+  }
+
+  if (!TELEGRAM_BOT_TOKEN) {
+    return json({ error: "TELEGRAM_BOT_TOKEN not configured" }, 500);
+  }
+
+  if (TELEGRAM_WEBHOOK_SECRET) {
+    const provided = req.headers.get("x-telegram-bot-api-secret-token") || "";
+    if (!timingSafeEqual(provided, TELEGRAM_WEBHOOK_SECRET)) {
+      return json({ error: "unauthorized" }, 401);
     }
   }
-}
 
-const app = express();
-app.get("/", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "bingo-blitz-telegram-bot-dev",
-    mode: ALLOW_POLLING ? "polling" : "health-only",
-    production: "Use supabase/functions/telegram-bot webhook",
-  });
-});
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, uptime: process.uptime(), miniAppConfigured: Boolean(MINI_APP_URL) });
-});
-app.listen(PORT, () => {
-  console.log(`Telegram bot health server listening on port ${PORT}`);
-});
+  let update: TgUpdate;
+  try {
+    update = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
 
-if (!ALLOW_POLLING) {
-  console.log("Polling disabled. Set BOT_POLLING=1 for local DEV, or deploy supabase/functions/telegram-bot.");
-} else {
-  poll().catch((error) => {
-    console.error("Telegram bot failed:", error);
-    process.exit(1);
-  });
-}
+  try {
+    if (update.message) await handleMessage(update.message);
+    if (update.callback_query) await handleCallback(update.callback_query);
+  } catch (error) {
+    console.error("telegram-bot handler error", error);
+  }
+
+  // Always 200 so Telegram does not retry endlessly on handler bugs.
+  return json({ ok: true });
+});

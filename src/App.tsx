@@ -6,8 +6,10 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MainLayout } from "@/components/MainLayout";
+import { PhoneGate } from "@/components/PhoneGate";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { TelegramIdentityProvider } from "@/hooks/useTelegramIdentity";
 import Index from "./pages/Index.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -54,26 +56,29 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
-          <BrowserRouter>
-            <a href="#main-content" className="skip-link">
-              Skip to main content
-            </a>
-            <Suspense fallback={<RouteFallback />}>
-              <Routes>
-                <Route path="/" element={<Navigate to="/game" replace />} />
-                <Route element={<MainLayout />}>
-                  <Route path="/game" element={<Index />} />
-                  <Route path="/history" element={<HistoryPage />} />
-                  <Route path="/wallet" element={<WalletPage />} />
-                  <Route path="/profile" element={<ProfilePage />} />
-                </Route>
-                <Route path="/admin" element={<AdminPage />} />
-                <Route path="/room/:code" element={<Room />} />
-                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
-          </BrowserRouter>
+          <TelegramIdentityProvider>
+            <BrowserRouter>
+              <PhoneGate />
+              <a href="#main-content" className="skip-link">
+                Skip to main content
+              </a>
+              <Suspense fallback={<RouteFallback />}>
+                <Routes>
+                  <Route path="/" element={<Navigate to="/game" replace />} />
+                  <Route element={<MainLayout />}>
+                    <Route path="/game" element={<Index />} />
+                    <Route path="/history" element={<HistoryPage />} />
+                    <Route path="/wallet" element={<WalletPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
+                  </Route>
+                  <Route path="/admin" element={<AdminPage />} />
+                  <Route path="/room/:code" element={<Room />} />
+                  {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
+            </BrowserRouter>
+          </TelegramIdentityProvider>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

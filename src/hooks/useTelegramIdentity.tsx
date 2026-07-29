@@ -1,11 +1,19 @@
-import { useEffect, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { api, getErrorMessage, Player } from "@/lib/api";
 
-type TgUser = { id: number; username?: string; first_name?: string };
+type TgUser = { id: number; username?: string; first_name?: string; last_name?: string };
 type TgWebApp = {
+  initData?: string;
   initDataUnsafe?: { user?: TgUser };
   ready?: () => void;
   expand?: () => void;
+  requestContact?: (callback?: (shared: boolean) => void) => void;
   HapticFeedback?: {
     impactOccurred: (s: "light" | "medium" | "heavy") => void;
     notificationOccurred: (s: "success" | "error" | "warning") => void;
@@ -21,6 +29,21 @@ declare global {
 const STORAGE_KEY = "bingo.mock_identity";
 const LOCAL_PLAYER_KEY = "bingo.local_player";
 const OFFLINE_ALLOWED = import.meta.env.DEV;
+
+type IdentityState = {
+  player: Player | null;
+  loading: boolean;
+  error: string | null;
+  offline: boolean;
+  needsPhoneNumber: boolean;
+  fromTelegram: boolean;
+  completePhoneRegistration: (phone_number: string) => Promise<Player>;
+  refreshPlayer: () => Promise<Player | null>;
+  updateLocalPlayer: (next: Player) => void;
+  requestTelegramContact: () => boolean;
+};
+
+const TelegramIdentityContext = createContext<IdentityState | null>(null);
 
 function getOrCreateMockIdentity(): { id: string; username: string } {
   const existing = localStorage.getItem(STORAGE_KEY);
@@ -74,27 +97,58 @@ function saveLocalPlayer(player: Player) {
   localStorage.setItem(LOCAL_PLAYER_KEY, JSON.stringify(player));
 }
 
-export function useTelegramIdentity() {
+function readTelegramIdentity(): {
+  telegram_id: string;
+  username: string;
+  initData: string;
+  fromTelegram: boolean;
+} | null {
+  const tg = window.Telegram?.WebApp;
+  tg?.ready?.();
+  tg?.expand?.();
+  const tgUser = tg?.initDataUnsafe?.user;
+  const initData = tg?.initData || "";
+  if (tgUser?.id) {
+    return {
+      telegram_id: String(tgUser.id),
+      username:
+        tgUser.username ||
+        [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") ||
+        `Player${tgUser.id}`,
+      initData,
+      fromTelegram: true,
+    };
+  }
+  if (!import.meta.env.DEV) return null;
+  const mock = getOrCreateMockIdentity();
+  return {
+    telegram_id: mock.id,
+    username: mock.username,
+    initData: "",
+    fromTelegram: false,
+  };
+}
+
+function useTelegramIdentityState(): IdentityState {
   const [player, setPlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
-  const [identity, setIdentity] = useState<{ telegram_id: string; username: string } | null>(null);
+  const [identity, setIdentity] = useState<{
+    telegram_id: string;
+    username: string;
+    initData: string;
+    fromTelegram: boolean;
+  } | null>(null);
 
   useEffect(() => {
-    const tg = window.Telegram?.WebApp;
-    tg?.ready?.();
-    tg?.expand?.();
-    const tgUser = tg?.initDataUnsafe?.user;
-    if (tgUser?.id) {
-      setIdentity({
-        telegram_id: String(tgUser.id),
-        username: tgUser.username || tgUser.first_name || `Player${tgUser.id}`,
-      });
+    const resolved = readTelegramIdentity();
+    if (!resolved) {
+      setError("Open Yegara Bingo from the Telegram bot to continue.");
+      setLoading(false);
       return;
     }
-    const mock = getOrCreateMockIdentity();
-    setIdentity({ telegram_id: mock.id, username: mock.username });
+    setIdentity(resolved);
   }, []);
 
   useEffect(() => {
@@ -102,7 +156,12 @@ export function useTelegramIdentity() {
     let cancelled = false;
     (async () => {
       try {
-        const { player } = await api.upsertPlayer(identity.telegram_id, identity.username);
+        const { player } = await api.upsertPlayer(
+          identity.telegram_id,
+          identity.username,
+          undefined,
+          identity.initData || undefined,
+        );
         if (!cancelled) {
           setPlayer(player);
           setError(null);
@@ -111,7 +170,7 @@ export function useTelegramIdentity() {
         }
       } catch (err: unknown) {
         if (!cancelled) {
-          if (OFFLINE_ALLOWED) {
+          if (OFFLINE_ALLOWED && !identity.fromTelegram) {
             const local = buildLocalPlayer(identity.telegram_id, identity.username);
             setPlayer(local);
             setOffline(true);
@@ -137,6 +196,7 @@ export function useTelegramIdentity() {
         identity.telegram_id,
         identity.username,
         phone_number.trim(),
+        identity.initData || undefined,
       );
       setPlayer(updated);
       setOffline(false);
@@ -161,6 +221,7 @@ export function useTelegramIdentity() {
         identity.telegram_id,
         identity.username,
         player?.phone_number ?? undefined,
+        identity.initData || undefined,
       );
       setPlayer(updated);
       setOffline(false);
@@ -177,18 +238,42 @@ export function useTelegramIdentity() {
     saveLocalPlayer(next);
   }
 
-  const needsPhoneNumber = Boolean(player && !player.phone_number?.trim());
+  function requestTelegramContact(): boolean {
+    const tg = window.Telegram?.WebApp;
+    if (!tg?.requestContact) return false;
+    tg.requestContact();
+    return true;
+  }
 
   return {
     player,
     loading,
     error,
     offline,
-    needsPhoneNumber,
+    needsPhoneNumber: Boolean(player && !player.phone_number?.trim()),
+    fromTelegram: Boolean(identity?.fromTelegram),
     completePhoneRegistration,
     refreshPlayer,
     updateLocalPlayer,
+    requestTelegramContact,
   };
+}
+
+export function TelegramIdentityProvider({ children }: { children: ReactNode }) {
+  const value = useTelegramIdentityState();
+  return (
+    <TelegramIdentityContext.Provider value={value}>
+      {children}
+    </TelegramIdentityContext.Provider>
+  );
+}
+
+export function useTelegramIdentity(): IdentityState {
+  const ctx = useContext(TelegramIdentityContext);
+  if (!ctx) {
+    throw new Error("useTelegramIdentity must be used within TelegramIdentityProvider");
+  }
+  return ctx;
 }
 
 export function haptic(kind: "light" | "medium" | "heavy" | "success" | "error" | "warning" = "light") {

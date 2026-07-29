@@ -156,11 +156,13 @@ npm install
 npm run dev
 ```
 
-### Run the Telegram bot
+### Run the Telegram bot (local DEV only)
 
 ```bash
-npm run bot
+BOT_POLLING=1 npm run bot
 ```
+
+Production uses the `telegram-bot` Edge Function webhook — see `docs/TELEGRAM_BOT.md`.
 
 ### Run tests
 
@@ -195,15 +197,17 @@ VERIFY_ET_API_KEY=VERIFY_BANK_ET_your_key_here
 
 ### Notes
 
-- The Telegram bot reads `TELEGRAM_BOT_TOKEN` or `BOT_TOKEN`.
-- The bot currently reads Supabase client values from `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
-- `TELEGRAM_MINI_APP_URL` is used to open the web app from Telegram.
+- Production Telegram bot is `supabase/functions/telegram-bot` (webhook), not the Render worker.
+- Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `BOT_INTERNAL_SECRET`, and `TELEGRAM_MINI_APP_URL` as **Supabase Edge Function secrets**.
+- `TELEGRAM_MINI_APP_URL` must be the HTTPS frontend URL configured in BotFather (not a `t.me` link).
+- Local polling bot may read `TELEGRAM_BOT_TOKEN` / `BOT_INTERNAL_SECRET` from `.env` when `BOT_POLLING=1`.
 - Deposit verification uses [Verify.ET](https://verify.et/docs). Set `VERIFY_ET_API_KEY` as a Supabase Edge Function secret (not in the frontend bundle):
 
 ```bash
 supabase secrets set VERIFY_ET_API_KEY=VERIFY_BANK_ET_your_key_here
 supabase secrets set VERIFY_ET_BASE_URL=https://verify.et
 supabase functions deploy game-action
+supabase functions deploy telegram-bot
 ```
 
 ## Supabase Setup
@@ -232,13 +236,26 @@ Adjust these commands to match your local Supabase workflow.
 
 ## Telegram Bot Commands
 
-The bot currently supports:
+Production bot is the Supabase Edge Function webhook (`supabase/functions/telegram-bot`).
+See [docs/TELEGRAM_BOT.md](docs/TELEGRAM_BOT.md) for secrets, `setWebhook`, and deploy steps.
 
-- `/start` - register and show quick actions
-- `/register` - register account
-- `/balance` - fetch wallet balances
-- `/deposit <amount> <note>` - create a deposit request
-- `/play` - open the mini app
+Supported commands:
+
+- `/start` - phone-first registration / main menu
+- `/play` - open the Mini App
+- `/balance` - wallet balances
+- `/instructions` - how to play
+- `/support` - support contact
+
+Deposit and withdraw happen in the Mini App Wallet tab.
+
+### Run the local DEV polling bot (optional)
+
+```bash
+BOT_POLLING=1 npm run bot
+```
+
+Do not poll the same bot token that already has a production webhook.
 
 ## Admin Access
 
@@ -273,8 +290,9 @@ This makes the SPA work correctly when deployed to Vercel.
 ### Recommended deployment pieces
 
 - Deploy the frontend to **Vercel** or another static host
-- Deploy Supabase database migrations and the **game-action** edge function
-- Host the Telegram bot separately as a long-running Node process if you want bot support
+- Deploy Supabase database migrations and the **game-action** + **telegram-bot** edge functions
+- Configure Telegram `setWebhook` as documented in `docs/TELEGRAM_BOT.md`
+- Do **not** host the Node polling worker in production once the webhook is live
 
 ## Important Implementation Details
 

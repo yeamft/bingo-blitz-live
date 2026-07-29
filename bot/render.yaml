@@ -1,17 +1,27 @@
+# DEPRECATED for production.
+# Production Telegram bot runs as a Supabase Edge Function webhook:
+#   supabase/functions/telegram-bot
+#
+# Keep this file only if you still need a temporary Render health/poller for DEV.
+# Prefer BOT_POLLING=1 locally via `npm run bot` instead of hosting a worker.
 services:
   - type: worker
-    name: bingo-blitz-telegram-bot
+    name: bingo-blitz-telegram-bot-dev-only
     runtime: node
     rootDir: bot
     buildCommand: npm install
     startCommand: npm start
     plan: free
     envVars:
+      - key: BOT_POLLING
+        value: "1"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: VITE_SUPABASE_URL
         sync: false
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: BOT_INTERNAL_SECRET
         sync: false
       - key: TELEGRAM_MINI_APP_URL
         sync: false
