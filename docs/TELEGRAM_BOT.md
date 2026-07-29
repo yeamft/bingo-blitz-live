@@ -4,15 +4,16 @@ Production bot transport is the Supabase Edge Function webhook at
 `supabase/functions/telegram-bot`. Do **not** run the Node polling worker
 (`bot/telegram-bot.js`) against the same bot token once the webhook is live.
 
-## Registration flow
+## Registration lock
 
-1. User sends `/start`
-2. If they already have a player row with a phone number → welcome + Play button
-3. Otherwise → reply keyboard asks them to share **their own** phone contact
-4. Bot calls `game-action` `upsert_player` with `x-bot-internal-secret`
-5. User taps **Play** (`web_app`) to open the Mini App HTTPS URL
-6. Mini App sends Telegram `initData`; `game-action` verifies HMAC and resolves the same player
-7. If phone is still missing, the Mini App `PhoneGate` blocks play until it is saved
+The Mini App stays locked until the player has a `phone_number` from bot contact sharing:
+
+1. User opens Mini App → sees **Register in the bot first**
+2. User sends `/start` in the bot and shares their own phone
+3. User returns and taps **Check again**
+4. Play Bingo / join / wallet actions unlock
+
+Server-side, `create_room`, `join_room`, cartela purchase, deposits, and withdrawals also reject unregistered players.
 
 ## Required secrets
 

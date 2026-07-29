@@ -40,13 +40,17 @@ function getRoomPayout(derash: number, houseCommissionPct: number) {
 export default function Room() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const { player, loading: idLoading } = useTelegramIdentity();
+  const { player, loading: idLoading, isRegistered } = useTelegramIdentity();
   const [roomId, setRoomId] = useState<string | null>(null);
   const [resolveErr, setResolveErr] = useState<string | null>(null);
 
   // Resolve code → room id; pass saved cartelas so lobby re-join can upgrade stake/cards
   useEffect(() => {
     if (!player || !code) return;
+    if (!isRegistered) {
+      setResolveErr("Register in the Telegram bot first. Send /start and share your phone number.");
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -78,7 +82,7 @@ export default function Room() {
     return () => {
       cancelled = true;
     };
-  }, [player, code]);
+  }, [player, code, isRegistered]);
 
   const { room, players, me, loading } = useRoomState(roomId, player?.id ?? null);
 

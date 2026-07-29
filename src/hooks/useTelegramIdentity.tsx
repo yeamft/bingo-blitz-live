@@ -13,6 +13,7 @@ type TgWebApp = {
   initDataUnsafe?: { user?: TgUser };
   ready?: () => void;
   expand?: () => void;
+  close?: () => void;
   requestContact?: (callback?: (shared: boolean) => void) => void;
   HapticFeedback?: {
     impactOccurred: (s: "light" | "medium" | "heavy") => void;
@@ -36,6 +37,7 @@ type IdentityState = {
   error: string | null;
   offline: boolean;
   needsPhoneNumber: boolean;
+  isRegistered: boolean;
   fromTelegram: boolean;
   completePhoneRegistration: (phone_number: string) => Promise<Player>;
   refreshPlayer: () => Promise<Player | null>;
@@ -251,6 +253,7 @@ function useTelegramIdentityState(): IdentityState {
     error,
     offline,
     needsPhoneNumber: Boolean(player && !player.phone_number?.trim()),
+    isRegistered: Boolean(player?.phone_number?.trim()),
     fromTelegram: Boolean(identity?.fromTelegram),
     completePhoneRegistration,
     refreshPlayer,

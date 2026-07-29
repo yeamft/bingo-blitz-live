@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Loader2, Phone } from "lucide-react";
+import { Loader2, Phone, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -12,50 +11,45 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
-import { getErrorMessage } from "@/lib/api";
 
-function normalizePhoneInput(raw: string): string {
-  let digits = raw.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) digits = digits.slice(1);
-  if (digits.startsWith("0") && digits.length === 10) digits = `251${digits.slice(1)}`;
-  if (digits.startsWith("9") && digits.length === 9) digits = `251${digits}`;
-  return digits;
-}
-
+/**
+ * Blocks the Mini App until the player has registered via the Telegram bot
+ * (/start + share own phone contact). Manual in-app phone entry is not allowed.
+ */
 export function PhoneGate() {
   const location = useLocation();
-  const {
-    player,
-    loading,
-    needsPhoneNumber,
-    completePhoneRegistration,
-    requestTelegramContact,
-    fromTelegram,
-  } = useTelegramIdentity();
-  const [phone, setPhone] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { player, loading, needsPhoneNumber, refreshPlayer, fromTelegram } = useTelegramIdentity();
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Admin uses its own auth surface; do not block /admin with player phone gate.
   if (location.pathname.startsWith("/admin")) return null;
   if (loading || !player || !needsPhoneNumber) return null;
 
-  async function handleSubmit() {
-    const cleaned = normalizePhoneInput(phone.trim());
-    if (!cleaned || cleaned.length < 9) {
-      toast.error("Enter a valid phone number");
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const updated = await refreshPlayer();
+      if (!updated?.phone_number?.trim()) {
+        toast.message("Still waiting", {
+          description: "Open the bot, send /start, share your phone, then tap Check again.",
+        });
+      } else {
+        toast.success("Registration complete");
+      }
+    } catch {
+      toast.error("Could not refresh. Try again.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function openBot() {
+    const botUrl = import.meta.env.VITE_TELEGRAM_BOT_URL as string | undefined;
+    if (botUrl) {
+      window.open(botUrl, "_blank");
       return;
     }
-
-    setSubmitting(true);
-    try {
-      await completePhoneRegistration(cleaned);
-      toast.success("Account ready");
-      setPhone("");
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    // Close Mini App so the user can finish /start in the chat.
+    window.Telegram?.WebApp?.close?.();
   }
 
   return (
@@ -69,40 +63,33 @@ export function PhoneGate() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Phone className="h-5 w-5 text-primary" />
-            Finish registration
+            Register in the bot first
           </DialogTitle>
           <DialogDescription>
-            Share your phone number to unlock play, deposits, and withdrawals.
-            {fromTelegram
-              ? " You can also share it from the Telegram bot with /start."
-              : ""}
+            The Mini App stays locked until you register with the Telegram bot.
+            Send <strong>/start</strong> and share your own phone number, then come back.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <Input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="09xxxxxxxx or 2519xxxxxxxx"
-            inputMode="tel"
-            autoComplete="tel"
-            className="h-11"
-          />
-          <Button onClick={handleSubmit} disabled={submitting} className="w-full h-11">
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save phone & continue"}
+        <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+          <li>Open the Yegara Bingo bot chat</li>
+          <li>Send /start</li>
+          <li>Tap Share phone number</li>
+          <li>Return here and tap Check again</li>
+        </ol>
+        <div className="space-y-2 pt-1">
+          <Button onClick={handleRefresh} disabled={refreshing} className="h-11 w-full">
+            {refreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Check again
+              </>
+            )}
           </Button>
-          {fromTelegram && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full h-11"
-              onClick={() => {
-                const requested = requestTelegramContact();
-                if (!requested) {
-                  toast.message("Enter your phone number below");
-                }
-              }}
-            >
-              Share via Telegram
+          {(fromTelegram || import.meta.env.VITE_TELEGRAM_BOT_URL) && (
+            <Button type="button" variant="outline" className="h-11 w-full" onClick={openBot}>
+              Open bot to register
             </Button>
           )}
         </div>

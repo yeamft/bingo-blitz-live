@@ -962,6 +962,15 @@ async function ensurePlayerNotBlocked(player_id: string) {
   return player;
 }
 
+async function ensurePlayerRegistered(player_id: string) {
+  const player = await ensurePlayerNotBlocked(player_id);
+  const phone = (player as { phone_number?: string | null }).phone_number;
+  if (!phone || !String(phone).trim()) {
+    throw new Error("Register in the Telegram bot first. Send /start and share your phone number.");
+  }
+  return player;
+}
+
 async function getRoomOrThrow(room_id: string) {
   const { data: room } = await supabase
     .from("rooms")
@@ -1237,7 +1246,7 @@ Deno.serve(async (req: Request) => {
       case "create_room": {
         const { player_id, stake_amount, selected_cartelas, is_private, room_name, max_players, password } = args;
         if (!player_id) return json({ error: "missing player_id" }, 400);
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const privateRoom = Boolean(is_private);
         const stakePerCard = normalizeStake(privateRoom, stake_amount);
         const roomName = sanitizeRoomName(room_name, privateRoom);
@@ -1355,7 +1364,7 @@ Deno.serve(async (req: Request) => {
         const { code, player_id, selected_cartelas, password } = args;
         if (!code || !player_id)
           return json({ error: "missing fields" }, 400);
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const safeCode = String(code).toUpperCase().slice(0, 10);
         const cartelas = normalizeCartelas(selected_cartelas);
         const joinStake = (room: { stake_amount: number }) => room.stake_amount * cartelas.length;
@@ -1878,6 +1887,7 @@ Deno.serve(async (req: Request) => {
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid transfer" }, 400);
 
+        await ensurePlayerRegistered(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
         if (player.main_wallet_balance < numericAmount) {
           return json({ error: "Insufficient main wallet balance" }, 400);
@@ -1910,7 +1920,7 @@ Deno.serve(async (req: Request) => {
           return json({ error: "invalid transfer", code: "INVALID_AMOUNT" }, 400);
         }
 
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
         if (player.play_wallet_balance < numericAmount) {
           return json({ error: "Insufficient play wallet balance", code: "INSUFFICIENT_BALANCE" }, 400);
@@ -2058,7 +2068,7 @@ Deno.serve(async (req: Request) => {
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid deposit request" }, 400);
 
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
 
         if (!provider || !reference) {
@@ -2125,7 +2135,7 @@ Deno.serve(async (req: Request) => {
         const numericAmount = Math.trunc(Number(amount) || 0);
         if (!player_id || numericAmount <= 0) return json({ error: "invalid withdrawal request" }, 400);
 
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const player = normalizePlayerWallets(await getPlayerOrThrow(String(player_id)));
         const availableMain = Math.max(0, player.main_wallet_balance - Number((player as { locked_main_balance?: number }).locked_main_balance ?? 0));
         if (availableMain < numericAmount) {
@@ -2183,7 +2193,7 @@ Deno.serve(async (req: Request) => {
       case "reserve_cartelas": {
         const { room_id, player_id, selected_cartelas } = args;
         if (!room_id || !player_id) return json({ error: "missing fields" }, 400);
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const reservation = await reserveCartelasForPlayer(String(room_id), String(player_id), selected_cartelas);
         const market = await buildRoomCartelaMarket(String(room_id), String(player_id));
         return json({ ok: true, reservation, market });
@@ -2192,7 +2202,7 @@ Deno.serve(async (req: Request) => {
       case "confirm_cartela_purchase": {
         const { room_id, player_id } = args;
         if (!room_id || !player_id) return json({ error: "missing fields" }, 400);
-        await ensurePlayerNotBlocked(String(player_id));
+        await ensurePlayerRegistered(String(player_id));
         const result = await confirmCartelaPurchase(String(room_id), String(player_id));
         const market = await buildRoomCartelaMarket(String(room_id), String(player_id));
         return json({ ok: true, ...result, market });

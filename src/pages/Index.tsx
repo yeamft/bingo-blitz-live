@@ -39,7 +39,7 @@ type LobbyRoomCard = {
 };
 
 const Index = () => {
-  const { player, loading, error, offline } = useTelegramIdentity();
+  const { player, loading, error, offline, isRegistered } = useTelegramIdentity();
   const { t, lang, toggle } = useLang();
   const navigate = useNavigate();
 
@@ -241,7 +241,17 @@ const Index = () => {
     });
   }
 
+  function requireRegistration(): boolean {
+    if (isRegistered) return true;
+    toast.error("Register in the bot first", {
+      description: "Send /start and share your phone number, then reopen the app.",
+    });
+    haptic("warning");
+    return false;
+  }
+
   function handleSelectGame(card: LobbyRoomCard) {
+    if (!requireRegistration()) return;
     if (card.room && !card.joinableAsPlayer) {
       navigate(`/room/${card.room.code}`);
       haptic("warning");
@@ -257,6 +267,7 @@ const Index = () => {
   }
 
   async function handleJoinByCode() {
+    if (!requireRegistration()) return;
     if (!player || !entryCode.trim()) return;
 
     setBusy("entryJoin");
@@ -293,6 +304,7 @@ const Index = () => {
   }
 
   function handleCreatePrivateRoomStart() {
+    if (!requireRegistration()) return;
     setSelectedRoomCode(null);
     setSelectedCartelas([1]);
     setCreatingPrivateRoom(true);
@@ -375,6 +387,7 @@ const Index = () => {
   }, [selectedRoomCode, lobbyRooms]);
 
   async function handleJoinSelectedGame() {
+    if (!requireRegistration()) return;
     if (!player) return;
     if (!selectedCartelas.length) {
       toast.error(t("chooseUpToThree"));
@@ -499,6 +512,16 @@ const Index = () => {
 
       {step === "entry" ? (
         <section className="space-y-3">
+          {!isRegistered ? (
+            <div className="rounded-3xl border border-warning/40 bg-warning/10 p-5 text-left shadow-card">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-warning">Registration required</p>
+              <h2 className="mt-2 text-2xl font-black">Register in the bot first</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Send /start in the Telegram bot and share your phone number. Play Bingo unlocks after that.
+              </p>
+            </div>
+          ) : (
+            <>
           <button
             type="button"
             onClick={() => {
@@ -537,6 +560,8 @@ const Index = () => {
               </span>
             </button>
           </div>
+            </>
+          )}
 
         </section>
       ) : step === "lobby" ? (
@@ -561,8 +586,8 @@ const Index = () => {
           {lobbyCards.map((card) => {
             const isOpen = card.joinableAsPlayer;
             const isWatchable = Boolean(card.room && !isOpen);
-            const canStartRoom = !card.room;
-            const canSelect = isOpen || isWatchable || canStartRoom;
+            const canStartRoom = isRegistered && !card.room;
+            const canSelect = isRegistered && (isOpen || isWatchable || canStartRoom);
             const fillPct = Math.min(100, Math.round((card.playersJoined / card.maxPlayers) * 100));
             const startingSoon = isOpen && card.countdownSeconds !== null && card.countdownSeconds <= 10;
 
