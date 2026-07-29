@@ -28,6 +28,16 @@ type AdminChartsProps = {
   summary: AdminSummary;
 };
 
+function chartTooltipStyle() {
+  return {
+    backgroundColor: "hsl(var(--card))",
+    border: "1px solid hsl(var(--border))",
+    borderRadius: "0.75rem",
+    color: "hsl(var(--foreground))",
+    fontSize: "12px",
+  };
+}
+
 export function AdminFinancialCharts({ summary }: AdminChartsProps) {
   const financialData = [
     { name: "Deposits", value: summary.totals.total_deposits ?? 0, fill: CHART_COLORS[1] },
@@ -55,13 +65,13 @@ export function AdminFinancialCharts({ summary }: AdminChartsProps) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <ChartCard title="Financial Overview" description="Deposits, withdrawals, revenue, and payouts">
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={financialData}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip formatter={(value: number) => formatEtb(value)} />
-            <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={financialData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+            <XAxis dataKey="name" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+            <Tooltip formatter={(value: number) => formatEtb(value)} contentStyle={chartTooltipStyle()} />
+            <Bar dataKey="value" radius={[8, 8, 0, 0]}>
               {financialData.map((entry) => (
                 <Cell key={entry.name} fill={entry.fill} />
               ))}
@@ -72,17 +82,27 @@ export function AdminFinancialCharts({ summary }: AdminChartsProps) {
 
       <ChartCard title="Room Status" description="Distribution of room lifecycle states">
         {roomStatusData.length === 0 ? (
-          <p className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">No room data</p>
+          <p className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">No room data</p>
         ) : (
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={280}>
             <PieChart>
-              <Pie data={roomStatusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+              <Pie
+                data={roomStatusData}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={56}
+                outerRadius={92}
+                paddingAngle={3}
+                label={({ name, value }) => `${name}: ${value}`}
+              >
                 {roomStatusData.map((entry, index) => (
                   <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip />
-              <Legend />
+              <Tooltip contentStyle={chartTooltipStyle()} />
+              <Legend wrapperStyle={{ fontSize: "12px" }} />
             </PieChart>
           </ResponsiveContainer>
         )}
@@ -90,15 +110,22 @@ export function AdminFinancialCharts({ summary }: AdminChartsProps) {
 
       <ChartCard title="Transaction Volume" description="Top transaction types by volume" className="lg:col-span-2">
         {transactionTrend.length === 0 ? (
-          <p className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">No transactions yet</p>
+          <p className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">No transactions yet</p>
         ) : (
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={transactionTrend}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-              <XAxis dataKey="kind" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value: number) => formatEtb(value)} />
-              <Line type="monotone" dataKey="amount" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 4 }} />
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={transactionTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+              <XAxis dataKey="kind" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+              <Tooltip formatter={(value: number) => formatEtb(value)} contentStyle={chartTooltipStyle()} />
+              <Line
+                type="monotone"
+                dataKey="amount"
+                stroke="hsl(var(--primary))"
+                strokeWidth={2.5}
+                dot={{ r: 4, fill: "hsl(var(--primary))" }}
+                activeDot={{ r: 6 }}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -120,9 +147,9 @@ function ChartCard({
 }) {
   return (
     <div className={`rounded-2xl border border-border bg-card p-5 shadow-card ${className}`}>
-      <div className="mb-4">
+      <div className="mb-4 border-b border-border pb-4">
         <h3 className="text-base font-bold text-foreground">{title}</h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
       </div>
       {children}
     </div>

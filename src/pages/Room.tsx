@@ -556,12 +556,11 @@ function RoomInner({
                     You have a completed line — tap BINGO!
                   </div>
                 )}
-                {myCards.map((card, idx) => (
-                  <div key={idx}>
-                    <p className="mb-1.5 text-xs font-black uppercase tracking-wider text-muted-foreground">
-                      {t("cartela")} {idx + 1}
-                    </p>
-                    <BingoCard
+                <div className="grid grid-cols-2 gap-1.5">
+                  {myCards.map((card, idx) => (
+                    <CompactBingoCard
+                      key={idx}
+                      index={idx}
                       numbers={card}
                       marked={manualMarked}
                       current={current}
@@ -569,8 +568,8 @@ function RoomInner({
                       onSelectNumber={handleMarkNumber}
                       disabled={room.status !== "live" || isWatcher}
                     />
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )
           ) : (

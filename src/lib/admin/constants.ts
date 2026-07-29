@@ -1,5 +1,7 @@
 /** Shared admin dashboard constants and types. */
 
+import type { LucideIcon } from "lucide-react";
+
 export type AdminSection =
   | "overview"
   | "live"
@@ -12,6 +14,22 @@ export type AdminSection =
   | "wallet"
   | "settings"
   | "audit";
+
+export type AdminBadgeKey = "pending_wallet" | "deposits" | "withdrawals" | "live_rooms";
+
+export type AdminNavItem = {
+  id: AdminSection;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  badgeKey?: AdminBadgeKey;
+};
+
+export type AdminNavGroup = {
+  id: string;
+  label: string;
+  items: AdminNavItem[];
+};
 
 export const ADMIN_SECTIONS: Array<{ id: AdminSection; label: string; description: string }> = [
   { id: "overview", label: "Overview", description: "Key metrics and platform health" },

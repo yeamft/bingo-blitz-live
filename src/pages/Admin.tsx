@@ -1,29 +1,23 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTheme } from "next-themes";
 import {
-  Activity,
   ArrowDownRight,
   ArrowUpRight,
-  BarChart3,
-  Coins,
   FileText,
   Loader2,
-  LogOut,
   Radio,
-  RefreshCw,
   Settings,
   Shield,
-  Users,
-  Wallet,
-  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AdminFinancialCharts } from "@/components/admin/AdminCharts";
 import { AdminDataTable, type AdminColumn } from "@/components/admin/AdminDataTable";
+import { AdminHeader } from "@/components/admin/AdminHeader";
+import { AdminMobileTopBar, AdminSidebar } from "@/components/admin/AdminSidebar";
+import { AdminOverview } from "@/components/admin/AdminOverview";
 import { hasStoredThemePreference } from "@/components/theme/ThemeProvider";
-import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
 import { usePaginatedRows } from "@/hooks/usePaginatedRows";
 import {
@@ -41,6 +35,7 @@ import {
   ADMIN_SESSION_KEY,
   DEFAULT_SYSTEM_SETTINGS,
   type AdminSection,
+  type AdminBadgeKey,
 } from "@/lib/admin/constants";
 import { exportToCsv } from "@/lib/admin/csv";
 import {
@@ -151,6 +146,7 @@ export default function AdminPage() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [adjustments, setAdjustments] = useState<Record<string, string>>({});
 
   const activeMeta = useMemo(
@@ -455,6 +451,23 @@ export default function AdminPage() {
     () => (summary?.requests ?? []).filter((request) => request.status === "pending"),
     [summary?.requests],
   );
+  const pendingDeposits = useMemo(
+    () => (summary?.requests ?? []).filter((request) => request.kind === "deposit" && request.status === "pending"),
+    [summary?.requests],
+  );
+  const pendingWithdrawals = useMemo(
+    () => (summary?.requests ?? []).filter((request) => request.kind === "withdrawal" && request.status === "pending"),
+    [summary?.requests],
+  );
+  const navBadges = useMemo<Partial<Record<AdminBadgeKey, number>>>(
+    () => ({
+      pending_wallet: pendingRequests.length,
+      deposits: pendingDeposits.length,
+      withdrawals: pendingWithdrawals.length,
+      live_rooms: liveRooms.length,
+    }),
+    [pendingRequests.length, pendingDeposits.length, pendingWithdrawals.length, liveRooms.length],
+  );
 
   const playersTable = usePaginatedRows<Player>({
     rows: players,
@@ -710,160 +723,81 @@ export default function AdminPage() {
   const totals = summary.totals;
   const netProfit = totals.net_profit ?? totals.total_revenue - totals.total_payouts;
 
+  const liveHeaderAction =
+    activeSection === "live" ? (
+      <Button type="button" size="sm" onClick={() => void handleWorkerTick()} disabled={busy !== null} className="gap-2">
+        {busy === "worker-tick" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radio className="h-4 w-4" />}
+        Worker tick
+      </Button>
+    ) : null;
+
   return (
-    <main className="min-h-screen w-full bg-background">
-      <div className="mx-auto flex w-full max-w-[90rem] flex-col lg:flex-row">
-        <aside className="shrink-0 border-b border-border bg-card px-4 py-5 shadow-card lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:border-b-0 lg:border-r">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="rounded-2xl bg-primary p-3 text-primary-foreground shadow-card">
-              <Shield className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold leading-tight text-foreground">Admin Panel</h1>
-              <p className="text-xs text-muted-foreground">Bingo Blitz Operations</p>
-            </div>
-          </div>
+    <main className="admin-shell">
+      <AdminMobileTopBar activeLabel={activeMeta.label} onOpenMenu={() => setMobileNavOpen(true)} />
+      <div className="mx-auto flex w-full max-w-[100rem]">
+        <AdminSidebar
+          activeSection={activeSection}
+          username={session.player.username}
+          badges={navBadges}
+          onNavigate={navigateAdmin}
+          onLogout={() => void handleLogout()}
+          mobileOpen={mobileNavOpen}
+          onMobileOpenChange={setMobileNavOpen}
+        />
 
-          <nav className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-            {ADMIN_SECTIONS.map((section) => (
-              <AdminNavLink
-                key={section.id}
-                label={section.label}
-                active={activeSection === section.id}
-                onClick={() => navigateAdmin(section.id)}
-              />
-            ))}
-          </nav>
-
-          <div className="mt-5 rounded-xl border border-border bg-muted/30 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Signed in as</p>
-            <p className="mt-1 text-sm font-semibold text-foreground">{session.player.username}</p>
-          </div>
-
-          <Button type="button" variant="outline" className="mt-4 w-full gap-2" onClick={() => void handleLogout()}>
-            <LogOut className="h-4 w-4" />
-            Logout
-          </Button>
-        </aside>
-
-        <div className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
-          <header className="mb-6 rounded-2xl border border-border bg-card p-5 shadow-card">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Operations Center</p>
-                <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-                  {activeMeta.label}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">{activeMeta.description}</p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <ThemeToggle variant="menu" />
-                <Button type="button" variant="outline" onClick={() => void handleWorkerTick()} disabled={busy !== null}>
-                  {busy === "worker-tick" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Radio className="mr-2 h-4 w-4" />
-                      Worker tick
-                    </>
-                  )}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => void loadAdmin(session, true)}
-                  disabled={refreshing}
-                >
-                  {refreshing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      Refresh
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          </header>
+        <div className="admin-main">
+          <AdminHeader
+            section={activeSection}
+            label={activeMeta.label}
+            description={activeMeta.description}
+            refreshing={refreshing}
+            onRefresh={() => void loadAdmin(session, true)}
+            actions={liveHeaderAction}
+          />
 
           {activeSection === "overview" && (
-            <section className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-                <MetricCard icon={<Users className="h-4 w-4" />} label="Total Users" value={totals.total_users} />
-                <MetricCard
-                  icon={<Activity className="h-4 w-4" />}
-                  label="Active Players"
-                  value={totals.active_players ?? 0}
-                />
-                <MetricCard icon={<BarChart3 className="h-4 w-4" />} label="Total Rooms" value={totals.total_rooms ?? 0} />
-                <MetricCard icon={<BarChart3 className="h-4 w-4" />} label="Active Rooms" value={totals.active_rooms} />
-                <MetricCard icon={<Coins className="h-4 w-4" />} label="Live Rooms" value={totals.live_rooms} />
-                <MetricCard icon={<Radio className="h-4 w-4" />} label="Paused Rooms" value={totals.paused_rooms ?? 0} />
-                <MetricCard icon={<XCircle className="h-4 w-4" />} label="Closed Rooms" value={totals.closed_rooms ?? 0} />
-                <MetricCard
-                  icon={<Wallet className="h-4 w-4" />}
-                  label="Pending Requests"
-                  value={totals.pending_wallet_requests}
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <FinanceMetricCard label="Revenue" value={totals.total_revenue} tone="text-amber-600" />
-                <FinanceMetricCard label="Payouts" value={totals.total_payouts} tone="text-primary" />
-                <FinanceMetricCard label="Deposits" value={totals.total_deposits ?? 0} tone="text-emerald-600" />
-                <FinanceMetricCard label="Net Profit" value={netProfit} tone="text-foreground" />
-              </div>
-            </section>
+            <AdminOverview
+              summary={summary}
+              onNavigateDeposits={() => navigateAdmin("deposits")}
+              onNavigateWallet={() => navigateAdmin("wallet")}
+            />
           )}
 
           {activeSection === "live" && (
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Live Operations</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Active lobbies and live games. Use worker tick to advance server-side clocks.
-                  </p>
-                </div>
-                <Button type="button" size="sm" onClick={() => void handleWorkerTick()} disabled={busy !== null}>
-                  {busy === "worker-tick" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Run worker tick"}
-                </Button>
-              </div>
-
+            <AdminPanel
+              title="Live Operations"
+              description="Active lobbies and live games. Use worker tick to advance server-side clocks."
+            >
               <div className="overflow-x-auto rounded-xl border border-border">
                 {liveRooms.length === 0 ? (
-                  <p className="p-6 text-sm text-muted-foreground">No active rooms.</p>
+                  <p className="p-8 text-center text-sm text-muted-foreground">No active rooms right now.</p>
                 ) : (
-                  <table className="w-full min-w-[960px] text-sm">
-                    <thead className="bg-muted/50 text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <table className="admin-table w-full min-w-[960px] text-sm">
+                    <thead>
                       <tr>
-                        <th className="px-4 py-3">Code</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">Stake</th>
-                        <th className="px-4 py-3">Derash</th>
-                        <th className="px-4 py-3">Players</th>
-                        <th className="px-4 py-3">Called</th>
-                        <th className="px-4 py-3">Last</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
+                        <th>Code</th>
+                        <th>Status</th>
+                        <th>Stake</th>
+                        <th>Derash</th>
+                        <th>Players</th>
+                        <th>Called</th>
+                        <th>Last</th>
+                        <th className="text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border">
+                    <tbody>
                       {liveRooms.map((room) => (
-                        <tr key={room.id} className="hover:bg-muted/20">
-                          <td className="px-4 py-3 font-mono font-semibold">{room.code}</td>
-                          <td className="px-4 py-3">
+                        <tr key={room.id}>
+                          <td className="font-mono font-semibold">{room.code}</td>
+                          <td>
                             <StatusBadge status={room.status} />
                           </td>
-                          <td className="px-4 py-3">{formatEtb(room.stake_amount)}</td>
-                          <td className="px-4 py-3 font-semibold text-amber-600">{formatEtb(room.derash)}</td>
-                          <td className="px-4 py-3">{room.active_players_count ?? 0}</td>
-                          <td className="px-4 py-3">
-                            {room.called_numbers?.length ?? Math.max(0, room.current_index + 1)}
-                          </td>
-                          <td className="px-4 py-3">{room.last_called_number ?? "—"}</td>
-                          <td className="px-4 py-3">
+                          <td>{formatEtb(room.stake_amount)}</td>
+                          <td className="font-semibold text-amber-600 dark:text-amber-400">{formatEtb(room.derash)}</td>
+                          <td>{room.active_players_count ?? 0}</td>
+                          <td>{room.called_numbers?.length ?? Math.max(0, room.current_index + 1)}</td>
+                          <td>{room.last_called_number ?? "—"}</td>
+                          <td>
                             <RoomActionButtons
                               room={room}
                               busy={busy}
@@ -880,15 +814,15 @@ export default function AdminPage() {
                   </table>
                 )}
               </div>
-            </section>
+            </AdminPanel>
           )}
 
           {activeSection === "reports" && (
             <section className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <FinanceMetricCard label="Deposits" value={totals.total_deposits ?? 0} tone="text-emerald-600" />
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <FinanceMetricCard label="Deposits" value={totals.total_deposits ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
                 <FinanceMetricCard label="Withdrawals" value={totals.total_withdrawals ?? 0} tone="text-destructive" />
-                <FinanceMetricCard label="Net Profit" value={netProfit} tone="text-amber-600" />
+                <FinanceMetricCard label="Net Profit" value={netProfit} tone="text-amber-600 dark:text-amber-400" />
                 <MetricCard icon={<FileText className="h-4 w-4" />} label="Transactions" value={summary.transactions.length} />
               </div>
               <AdminFinancialCharts summary={summary} />
@@ -920,46 +854,43 @@ export default function AdminPage() {
           )}
 
           {activeSection === "rooms" && (
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-              <h3 className="mb-4 text-base font-bold text-foreground">Rooms</h3>
+            <AdminPanel title="Room History" description="All game rooms with lifecycle controls and winner status.">
               <div className="overflow-x-auto rounded-xl border border-border">
                 {summary.rooms.length === 0 ? (
-                  <p className="p-6 text-sm text-muted-foreground">No rooms found.</p>
+                  <p className="p-8 text-center text-sm text-muted-foreground">No rooms found.</p>
                 ) : (
-                  <table className="w-full min-w-[1200px] text-sm">
-                    <thead className="bg-muted/50 text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <table className="admin-table w-full min-w-[1200px] text-sm">
+                    <thead>
                       <tr>
-                        <th className="px-4 py-3">Room</th>
-                        <th className="px-4 py-3">Code</th>
-                        <th className="px-4 py-3">Type</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3">Stake</th>
-                        <th className="px-4 py-3">Pot</th>
-                        <th className="px-4 py-3">Players</th>
-                        <th className="px-4 py-3">Called</th>
-                        <th className="px-4 py-3">Winner</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
+                        <th>Room</th>
+                        <th>Code</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Stake</th>
+                        <th>Pot</th>
+                        <th>Players</th>
+                        <th>Called</th>
+                        <th>Winner</th>
+                        <th className="text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border">
+                    <tbody>
                       {summary.rooms.map((room) => (
-                        <tr key={room.id} className="hover:bg-muted/20">
-                          <td className="px-4 py-3 font-semibold">{room.room_name ?? room.code}</td>
-                          <td className="px-4 py-3 font-mono">{room.code}</td>
-                          <td className="px-4 py-3">{room.is_private ? "Private" : "Public"}</td>
-                          <td className="px-4 py-3">
+                        <tr key={room.id}>
+                          <td className="font-semibold">{room.room_name ?? room.code}</td>
+                          <td className="font-mono">{room.code}</td>
+                          <td>{room.is_private ? "Private" : "Public"}</td>
+                          <td>
                             <StatusBadge status={room.status} />
                           </td>
-                          <td className="px-4 py-3">{formatEtb(room.stake_amount)}</td>
-                          <td className="px-4 py-3">{formatEtb(room.derash)}</td>
-                          <td className="px-4 py-3">
+                          <td>{formatEtb(room.stake_amount)}</td>
+                          <td>{formatEtb(room.derash)}</td>
+                          <td>
                             {room.active_players_count ?? 0}/{room.joined_players_count ?? 0}
                           </td>
-                          <td className="px-4 py-3">{room.called_numbers?.length ?? 0}</td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {room.winner_name ?? room.winning_line ?? "—"}
-                          </td>
-                          <td className="px-4 py-3">
+                          <td>{room.called_numbers?.length ?? 0}</td>
+                          <td className="text-muted-foreground">{room.winner_name ?? room.winning_line ?? "—"}</td>
+                          <td>
                             <RoomActionButtons
                               room={room}
                               busy={busy}
@@ -975,7 +906,7 @@ export default function AdminPage() {
                   </table>
                 )}
               </div>
-            </section>
+            </AdminPanel>
           )}
 
           {activeSection === "deposits" && (
@@ -1001,18 +932,17 @@ export default function AdminPage() {
           )}
 
           {activeSection === "transactions" && (
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-              <h3 className="mb-4 text-base font-bold text-foreground">Recent Transactions</h3>
+            <AdminPanel title="Recent Transactions" description="Complete ledger activity across all player wallets.">
               <div className="space-y-2">
                 {summary.transactions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No transactions found.</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">No transactions found.</p>
                 ) : (
                   summary.transactions.map((transaction) => (
                     <TransactionRow key={transaction.id} transaction={transaction} />
                   ))
                 )}
               </div>
-            </section>
+            </AdminPanel>
           )}
 
           {activeSection === "wallet" && (
@@ -1027,19 +957,11 @@ export default function AdminPage() {
           )}
 
           {activeSection === "settings" && (
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-              <div className="mb-5 flex items-start gap-3">
-                <div className="rounded-xl bg-primary/10 p-2 text-primary">
-                  <Settings className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">System Settings</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Authoritative game rules and platform configuration shared across all clients.
-                  </p>
-                </div>
-              </div>
-
+            <AdminPanel
+              title="System Settings"
+              description="Authoritative game rules and platform configuration shared across all clients."
+              icon={<Settings className="h-5 w-5" />}
+            >
               <div className="grid gap-4 md:grid-cols-2">
                 {Object.entries(settings).map(([key, value]) => (
                   <label key={key} className="space-y-2 text-sm">
@@ -1062,23 +984,22 @@ export default function AdminPage() {
               <Button type="button" className="mt-5" onClick={() => void handleSaveSettings()} disabled={savingSettings}>
                 {savingSettings ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save settings"}
               </Button>
-            </section>
+            </AdminPanel>
           )}
 
           {activeSection === "audit" && (
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-              <h3 className="mb-4 text-base font-bold text-foreground">Audit Logs</h3>
-              <div className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+            <AdminPanel title="Audit Logs" description="Administrative actions recorded for compliance and troubleshooting.">
+              <div className="max-h-[36rem] space-y-2 overflow-y-auto pr-1">
                 {(summary.audit_logs ?? []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No audit logs found.</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">No audit logs found.</p>
                 ) : (
                   (summary.audit_logs ?? []).map((log) => (
                     <div key={log.id} className="rounded-xl border border-border bg-muted/20 p-4">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                         <p className="text-sm font-semibold text-foreground">{titleCase(log.action)}</p>
                         <p className="text-xs text-muted-foreground">{formatDateTime(log.created_at)}</p>
                       </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                      <p className="mt-2 truncate text-xs text-muted-foreground">
                         Player: {log.player_id ?? "system"}
                         {log.room_id ? ` · Room: ${log.room_id}` : ""}
                       </p>
@@ -1086,7 +1007,7 @@ export default function AdminPage() {
                   ))
                 )}
               </div>
-            </section>
+            </AdminPanel>
           )}
         </div>
       </div>
@@ -1094,27 +1015,28 @@ export default function AdminPage() {
   );
 }
 
-function AdminNavLink({
-  label,
-  active,
-  onClick,
+function AdminPanel({
+  title,
+  description,
+  children,
+  icon,
 }: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  title: string;
+  description: string;
+  children: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition-colors ${
-        active
-          ? "border-primary/40 bg-primary/10 text-primary"
-          : "border-border bg-background text-muted-foreground hover:border-primary/30 hover:bg-muted/40 hover:text-foreground"
-      }`}
-    >
-      {label}
-    </button>
+    <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
+      <div className="mb-5 flex items-start gap-3">
+        {icon && <div className="rounded-xl bg-primary/10 p-2 text-primary">{icon}</div>}
+        <div>
+          <h3 className="text-base font-bold text-foreground">{title}</h3>
+          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -1189,40 +1111,54 @@ function WalletRequestSection({
   onProcess: (requestId: number, approve: boolean) => Promise<void>;
   approveLabel: string;
 }) {
+  const pendingCount = requests.filter((request) => request.status === "pending").length;
+
   return (
-    <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-      <div className="mb-4">
-        <h3 className="text-base font-bold text-foreground">{title}</h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
+    <section className="rounded-2xl border border-border bg-card shadow-card">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
+        <div>
+          <h3 className="text-base font-bold text-foreground">{title}</h3>
+          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+        </div>
+        <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+          {pendingCount} pending
+        </span>
       </div>
-      <div className="space-y-2">
+
+      <div className="space-y-3 p-5">
         {requests.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No requests in this queue.</p>
+          <p className="py-8 text-center text-sm text-muted-foreground">No requests in this queue.</p>
         ) : (
           requests.map((request) => (
-            <div key={request.id} className="rounded-xl border border-border bg-muted/20 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-foreground">
-                    {titleCase(request.kind)} #{request.id}
-                  </p>
+            <div key={request.id} className="rounded-xl border border-border bg-muted/15 p-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-foreground">
+                      {titleCase(request.kind)} #{request.id}
+                    </p>
+                    <StatusBadge status={request.status} />
+                  </div>
                   <p className="text-xs text-muted-foreground">{formatDateTime(request.created_at)}</p>
-                  {request.note && <p className="mt-1 text-xs text-muted-foreground">{request.note}</p>}
+                  {request.note && (
+                    <p className="mt-2 rounded-lg bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+                      {request.note}
+                    </p>
+                  )}
                 </div>
-                <div className="text-right">
+                <div className="text-left sm:text-right">
                   <p
-                    className={`font-bold ${
-                      request.kind === "deposit" ? "text-emerald-600" : "text-destructive"
+                    className={`text-lg font-bold ${
+                      request.kind === "deposit" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"
                     }`}
                   >
                     {request.kind === "deposit" ? "+" : "-"}
                     {formatEtb(request.amount)}
                   </p>
-                  <StatusBadge status={request.status} />
                 </div>
               </div>
               {request.status === "pending" && (
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <Button
                     type="button"
                     size="sm"
