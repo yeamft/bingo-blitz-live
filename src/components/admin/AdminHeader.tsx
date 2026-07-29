@@ -7,7 +7,6 @@ import { ADMIN_NAV_GROUPS } from "@/lib/admin/navigation";
 type AdminHeaderProps = {
   section: AdminSection;
   label: string;
-  description: string;
   refreshing: boolean;
   onRefresh: () => void;
   actions?: React.ReactNode;

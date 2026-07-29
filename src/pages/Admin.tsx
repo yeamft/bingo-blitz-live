@@ -17,6 +17,7 @@ import { AdminDataTable, type AdminColumn } from "@/components/admin/AdminDataTa
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminMobileTopBar, AdminSidebar } from "@/components/admin/AdminSidebar";
 import { AdminOverview } from "@/components/admin/AdminOverview";
+import { AdminTableCard, AdminTableCount } from "@/components/admin/AdminTableCard";
 import { hasStoredThemePreference } from "@/components/theme/ThemeProvider";
 import { useTelegramIdentity } from "@/hooks/useTelegramIdentity";
 import { usePaginatedRows } from "@/hooks/usePaginatedRows";
@@ -516,6 +517,7 @@ export default function AdminPage() {
         key: "main_wallet",
         header: "Main",
         sortable: true,
+        className: "admin-num",
         render: (player) => (
           <span className="font-semibold">{formatEtb(player.main_wallet_balance ?? player.wallet_balance)}</span>
         ),
@@ -525,6 +527,7 @@ export default function AdminPage() {
         key: "play_wallet",
         header: "Play",
         sortable: true,
+        className: "admin-num",
         render: (player) => (
           <span className="font-semibold">{formatEtb(player.play_wallet_balance ?? player.wallet_balance)}</span>
         ),
@@ -560,7 +563,7 @@ export default function AdminPage() {
       {
         key: "actions",
         header: "Actions",
-        className: "min-w-[420px]",
+        className: "admin-wrap min-w-[420px]",
         render: (player) => (
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
@@ -746,7 +749,6 @@ export default function AdminPage() {
           <AdminHeader
             section={activeSection}
             label={activeMeta.label}
-            description={activeMeta.description}
             refreshing={refreshing}
             onRefresh={() => void loadAdmin(session, true)}
             actions={liveHeaderAction}
@@ -761,57 +763,56 @@ export default function AdminPage() {
           )}
 
           {activeSection === "live" && (
-            <AdminPanel
+            <AdminTableCard
               title="Live Operations"
-              description="Active lobbies and live games. Use worker tick to advance server-side clocks."
+              meta={<AdminTableCount label={`${liveRooms.length} active`} />}
+              empty={liveRooms.length === 0}
+              emptyMessage="No active rooms right now."
+              minWidthClass="min-w-[960px]"
             >
-              <div className="overflow-x-auto rounded-xl border border-border">
-                {liveRooms.length === 0 ? (
-                  <p className="p-8 text-center text-sm text-muted-foreground">No active rooms right now.</p>
-                ) : (
-                  <table className="admin-table w-full min-w-[960px] text-sm">
-                    <thead>
-                      <tr>
-                        <th>Code</th>
-                        <th>Status</th>
-                        <th>Stake</th>
-                        <th>Derash</th>
-                        <th>Players</th>
-                        <th>Called</th>
-                        <th>Last</th>
-                        <th className="text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {liveRooms.map((room) => (
-                        <tr key={room.id}>
-                          <td className="font-mono font-semibold">{room.code}</td>
-                          <td>
-                            <StatusBadge status={room.status} />
-                          </td>
-                          <td>{formatEtb(room.stake_amount)}</td>
-                          <td className="font-semibold text-amber-600 dark:text-amber-400">{formatEtb(room.derash)}</td>
-                          <td>{room.active_players_count ?? 0}</td>
-                          <td>{room.called_numbers?.length ?? Math.max(0, room.current_index + 1)}</td>
-                          <td>{room.last_called_number ?? "—"}</td>
-                          <td>
-                            <RoomActionButtons
-                              room={room}
-                              busy={busy}
-                              onClose={handleCloseRoom}
-                              onForceFinish={handleForceFinishRoom}
-                              onAdvance={handleAdvanceRoomRound}
-                              onReset={handleResetRoomState}
-                              compact
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </AdminPanel>
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Status</th>
+                  <th className="admin-num">Stake</th>
+                  <th className="admin-num">Derash</th>
+                  <th className="admin-num">Players</th>
+                  <th className="admin-num">Called</th>
+                  <th className="admin-num">Last</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveRooms.map((room) => (
+                  <tr key={room.id}>
+                    <td className="font-mono font-semibold">{room.code}</td>
+                    <td>
+                      <StatusBadge status={room.status} />
+                    </td>
+                    <td className="admin-num">{formatEtb(room.stake_amount)}</td>
+                    <td className="admin-num font-semibold text-amber-600 dark:text-amber-400">
+                      {formatEtb(room.derash)}
+                    </td>
+                    <td className="admin-num">{room.active_players_count ?? 0}</td>
+                    <td className="admin-num">
+                      {room.called_numbers?.length ?? Math.max(0, room.current_index + 1)}
+                    </td>
+                    <td className="admin-num">{room.last_called_number ?? "—"}</td>
+                    <td>
+                      <RoomActionButtons
+                        room={room}
+                        busy={busy}
+                        onClose={handleCloseRoom}
+                        onForceFinish={handleForceFinishRoom}
+                        onAdvance={handleAdvanceRoomRound}
+                        onReset={handleResetRoomState}
+                        compact
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </AdminTableCard>
           )}
 
           {activeSection === "reports" && (
@@ -829,7 +830,6 @@ export default function AdminPage() {
           {activeSection === "players" && (
             <AdminDataTable
               title="Player Management"
-              description="Search users, promote admins, block accounts, and adjust wallets."
               columns={playerColumns}
               rows={playersTable.rows}
               rowKey={(player) => player.id}
@@ -851,65 +851,62 @@ export default function AdminPage() {
           )}
 
           {activeSection === "rooms" && (
-            <AdminPanel title="Room History" description="All game rooms with lifecycle controls and winner status.">
-              <div className="overflow-x-auto rounded-xl border border-border">
-                {summary.rooms.length === 0 ? (
-                  <p className="p-8 text-center text-sm text-muted-foreground">No rooms found.</p>
-                ) : (
-                  <table className="admin-table w-full min-w-[1200px] text-sm">
-                    <thead>
-                      <tr>
-                        <th>Room</th>
-                        <th>Code</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Stake</th>
-                        <th>Pot</th>
-                        <th>Players</th>
-                        <th>Called</th>
-                        <th>Winner</th>
-                        <th className="text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summary.rooms.map((room) => (
-                        <tr key={room.id}>
-                          <td className="font-semibold">{room.room_name ?? room.code}</td>
-                          <td className="font-mono">{room.code}</td>
-                          <td>{room.is_private ? "Private" : "Public"}</td>
-                          <td>
-                            <StatusBadge status={room.status} />
-                          </td>
-                          <td>{formatEtb(room.stake_amount)}</td>
-                          <td>{formatEtb(room.derash)}</td>
-                          <td>
-                            {room.active_players_count ?? 0}/{room.joined_players_count ?? 0}
-                          </td>
-                          <td>{room.called_numbers?.length ?? 0}</td>
-                          <td className="text-muted-foreground">{room.winner_name ?? room.winning_line ?? "—"}</td>
-                          <td>
-                            <RoomActionButtons
-                              room={room}
-                              busy={busy}
-                              onClose={handleCloseRoom}
-                              onForceFinish={handleForceFinishRoom}
-                              onAdvance={handleAdvanceRoomRound}
-                              onReset={handleResetRoomState}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </AdminPanel>
+            <AdminTableCard
+              title="Room History"
+              meta={<AdminTableCount label={`${summary.rooms.length} rooms`} />}
+              empty={summary.rooms.length === 0}
+              emptyMessage="No rooms found."
+              minWidthClass="min-w-[1200px]"
+            >
+              <thead>
+                <tr>
+                  <th>Room</th>
+                  <th>Code</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th className="admin-num">Stake</th>
+                  <th className="admin-num">Pot</th>
+                  <th className="admin-num">Players</th>
+                  <th className="admin-num">Called</th>
+                  <th>Winner</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.rooms.map((room) => (
+                  <tr key={room.id}>
+                    <td className="font-semibold">{room.room_name ?? room.code}</td>
+                    <td className="font-mono text-muted-foreground">{room.code}</td>
+                    <td>{room.is_private ? "Private" : "Public"}</td>
+                    <td>
+                      <StatusBadge status={room.status} />
+                    </td>
+                    <td className="admin-num">{formatEtb(room.stake_amount)}</td>
+                    <td className="admin-num font-semibold">{formatEtb(room.derash)}</td>
+                    <td className="admin-num">
+                      {room.active_players_count ?? 0}/{room.joined_players_count ?? 0}
+                    </td>
+                    <td className="admin-num">{room.called_numbers?.length ?? 0}</td>
+                    <td className="text-muted-foreground">{room.winner_name ?? room.winning_line ?? "—"}</td>
+                    <td>
+                      <RoomActionButtons
+                        room={room}
+                        busy={busy}
+                        onClose={handleCloseRoom}
+                        onForceFinish={handleForceFinishRoom}
+                        onAdvance={handleAdvanceRoomRound}
+                        onReset={handleResetRoomState}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </AdminTableCard>
           )}
 
           {activeSection === "deposits" && (
             <WalletRequestSection
               title="Deposit Queue"
-              description="Review and approve incoming deposit requests."
               requests={depositRequests}
               busy={busy}
               onProcess={handleWalletRequest}
@@ -920,7 +917,6 @@ export default function AdminPage() {
           {activeSection === "withdrawals" && (
             <WalletRequestSection
               title="Withdrawal Queue"
-              description="Review and approve outgoing withdrawal requests."
               requests={withdrawalRequests}
               busy={busy}
               onProcess={handleWalletRequest}
@@ -929,23 +925,33 @@ export default function AdminPage() {
           )}
 
           {activeSection === "transactions" && (
-            <AdminPanel title="Recent Transactions" description="Complete ledger activity across all player wallets.">
-              <div className="space-y-2">
-                {summary.transactions.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">No transactions found.</p>
-                ) : (
-                  summary.transactions.map((transaction) => (
-                    <TransactionRow key={transaction.id} transaction={transaction} />
-                  ))
-                )}
-              </div>
-            </AdminPanel>
+            <AdminTableCard
+              title="Recent Transactions"
+              meta={<AdminTableCount label={`${summary.transactions.length} entries`} />}
+              empty={summary.transactions.length === 0}
+              emptyMessage="No transactions found."
+              minWidthClass="min-w-[820px]"
+            >
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Player</th>
+                  <th>Date</th>
+                  <th className="admin-num">Amount</th>
+                  <th className="admin-num">Balance after</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.transactions.map((transaction) => (
+                  <TransactionRow key={transaction.id} transaction={transaction} />
+                ))}
+              </tbody>
+            </AdminTableCard>
           )}
 
           {activeSection === "wallet" && (
             <WalletRequestSection
               title="Wallet Queue"
-              description="All pending wallet requests across deposits and withdrawals."
               requests={pendingRequests}
               busy={busy}
               onProcess={handleWalletRequest}
@@ -956,7 +962,6 @@ export default function AdminPage() {
           {activeSection === "settings" && (
             <AdminPanel
               title="System Settings"
-              description="Authoritative game rules and platform configuration shared across all clients."
               icon={<Settings className="h-5 w-5" />}
             >
               <div className="grid gap-4 md:grid-cols-2">
@@ -985,26 +990,32 @@ export default function AdminPage() {
           )}
 
           {activeSection === "audit" && (
-            <AdminPanel title="Audit Logs" description="Administrative actions recorded for compliance and troubleshooting.">
-              <div className="max-h-[36rem] space-y-2 overflow-y-auto pr-1">
-                {(summary.audit_logs ?? []).length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">No audit logs found.</p>
-                ) : (
-                  (summary.audit_logs ?? []).map((log) => (
-                    <div key={log.id} className="rounded-xl border border-border bg-muted/20 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-foreground">{titleCase(log.action)}</p>
-                        <p className="text-xs text-muted-foreground">{formatDateTime(log.created_at)}</p>
-                      </div>
-                      <p className="mt-2 truncate text-xs text-muted-foreground">
-                        Player: {log.player_id ?? "system"}
-                        {log.room_id ? ` · Room: ${log.room_id}` : ""}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </AdminPanel>
+            <AdminTableCard
+              title="Audit Logs"
+              meta={<AdminTableCount label={`${(summary.audit_logs ?? []).length} events`} />}
+              empty={(summary.audit_logs ?? []).length === 0}
+              emptyMessage="No audit logs found."
+              minWidthClass="min-w-[860px]"
+            >
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Player</th>
+                  <th>Room</th>
+                  <th className="admin-num">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(summary.audit_logs ?? []).map((log) => (
+                  <tr key={log.id}>
+                    <td className="font-semibold">{titleCase(log.action)}</td>
+                    <td className="font-mono text-xs text-muted-foreground">{log.player_id ?? "system"}</td>
+                    <td className="font-mono text-xs text-muted-foreground">{log.room_id ?? "—"}</td>
+                    <td className="admin-num text-muted-foreground">{formatDateTime(log.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </AdminTableCard>
           )}
         </div>
       </div>
@@ -1018,7 +1029,6 @@ function AdminPanel({
   icon,
 }: {
   title: string;
-  description: string;
   children: ReactNode;
   icon?: ReactNode;
 }) {
@@ -1075,19 +1085,20 @@ function FinanceMetricCard({
 function TransactionRow({ transaction }: { transaction: Transaction }) {
   const positive = transaction.amount >= 0;
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 p-4">
-      <div>
-        <p className="font-semibold text-foreground">{titleCase(transaction.kind)}</p>
-        <p className="text-xs text-muted-foreground">{formatDateTime(transaction.created_at)}</p>
-      </div>
-      <div className="text-right">
-        <p className={`flex items-center justify-end gap-1 font-bold ${positive ? "text-emerald-600" : "text-destructive"}`}>
-          {positive ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+    <tr>
+      <td className="font-semibold">{titleCase(transaction.kind)}</td>
+      <td className="font-mono text-xs text-muted-foreground">{transaction.player_id}</td>
+      <td className="text-muted-foreground">{formatDateTime(transaction.created_at)}</td>
+      <td
+        className={`admin-num font-bold ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}
+      >
+        <span className="inline-flex items-center justify-end gap-1">
+          {positive ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
           {formatEtb(transaction.amount)}
-        </p>
-        <p className="text-xs text-muted-foreground">Balance {formatEtb(transaction.balance_after)}</p>
-      </div>
-    </div>
+        </span>
+      </td>
+      <td className="admin-num text-muted-foreground">{formatEtb(transaction.balance_after)}</td>
+    </tr>
   );
 }
 
@@ -1099,7 +1110,6 @@ function WalletRequestSection({
   approveLabel,
 }: {
   title: string;
-  description: string;
   requests: WalletRequest[];
   busy: string | null;
   onProcess: (requestId: number, approve: boolean) => Promise<void>;
@@ -1108,50 +1118,45 @@ function WalletRequestSection({
   const pendingCount = requests.filter((request) => request.status === "pending").length;
 
   return (
-    <section className="rounded-2xl border border-border bg-card shadow-card">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
-        <div>
-          <h3 className="text-base font-bold text-foreground">{title}</h3>
-        </div>
-        <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
-          {pendingCount} pending
-        </span>
-      </div>
-
-      <div className="space-y-3 p-5">
-        {requests.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">No requests in this queue.</p>
-        ) : (
-          requests.map((request) => (
-            <div key={request.id} className="rounded-xl border border-border bg-muted/15 p-4">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold text-foreground">
-                      {titleCase(request.kind)} #{request.id}
-                    </p>
-                    <StatusBadge status={request.status} />
-                  </div>
-                  <p className="text-xs text-muted-foreground">{formatDateTime(request.created_at)}</p>
-                  {request.note && (
-                    <p className="mt-2 rounded-lg bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-                      {request.note}
-                    </p>
-                  )}
-                </div>
-                <div className="text-left sm:text-right">
-                  <p
-                    className={`text-lg font-bold ${
-                      request.kind === "deposit" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"
-                    }`}
-                  >
-                    {request.kind === "deposit" ? "+" : "-"}
-                    {formatEtb(request.amount)}
-                  </p>
-                </div>
-              </div>
-              {request.status === "pending" && (
-                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+    <AdminTableCard
+      title={title}
+      meta={<AdminTableCount label={`${pendingCount} pending`} />}
+      empty={requests.length === 0}
+      emptyMessage="No requests in this queue."
+      minWidthClass="min-w-[900px]"
+    >
+      <thead>
+        <tr>
+          <th>Request</th>
+          <th>Status</th>
+          <th>Submitted</th>
+          <th className="admin-num">Amount</th>
+          <th>Reference</th>
+          <th className="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {requests.map((request) => (
+          <tr key={request.id}>
+            <td className="font-semibold">
+              {titleCase(request.kind)} #{request.id}
+            </td>
+            <td>
+              <StatusBadge status={request.status} />
+            </td>
+            <td className="text-muted-foreground">{formatDateTime(request.created_at)}</td>
+            <td
+              className={`admin-num font-bold ${
+                request.kind === "deposit" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"
+              }`}
+            >
+              {request.kind === "deposit" ? "+" : "-"}
+              {formatEtb(request.amount)}
+            </td>
+            <td className="admin-wrap max-w-[22rem] text-xs text-muted-foreground">{request.note ?? "—"}</td>
+            <td>
+              {request.status === "pending" ? (
+                <div className="flex justify-end gap-2">
                   <Button
                     type="button"
                     size="sm"
@@ -1170,12 +1175,14 @@ function WalletRequestSection({
                     Reject
                   </Button>
                 </div>
+              ) : (
+                <p className="text-right text-xs text-muted-foreground">Processed</p>
               )}
-            </div>
-          ))
-        )}
-      </div>
-    </section>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </AdminTableCard>
   );
 }
 

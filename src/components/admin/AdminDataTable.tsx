@@ -16,7 +16,6 @@ export type AdminColumn<T> = {
 
 type AdminDataTableProps<T> = {
   title?: string;
-  description?: string;
   columns: AdminColumn<T>[];
   rows: T[];
   rowKey: (row: T) => string;
@@ -90,17 +89,17 @@ export function AdminDataTable<T>({
         </p>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="admin-table w-full min-w-[720px] text-sm">
-          <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+      <div className="admin-table-scroll rounded-none border-0">
+        <table className="admin-table min-w-[720px]">
+          <thead>
             <tr>
               {columns.map((column) => (
-                <th key={column.key} className={cn("px-4 py-3 font-semibold", column.className)}>
+                <th key={column.key} className={column.className}>
                   {column.sortable && onSort ? (
                     <button
                       type="button"
                       onClick={() => onSort(column.key)}
-                      className="inline-flex items-center gap-1 text-left hover:text-foreground"
+                      className="inline-flex items-center gap-1 text-left transition-colors hover:text-foreground"
                     >
                       {column.header}
                       {sortKey === column.key ? (
@@ -119,21 +118,21 @@ export function AdminDataTable<T>({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center text-muted-foreground">
+                <td colSpan={columns.length} className="py-12 text-center text-muted-foreground">
                   Loading records…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center text-muted-foreground">
+                <td colSpan={columns.length} className="py-12 text-center text-muted-foreground">
                   {emptyMessage}
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={rowKey(row)} className="transition-colors hover:bg-muted/30">
+                <tr key={rowKey(row)}>
                   {columns.map((column) => (
-                    <td key={column.key} className={cn("px-4 py-3 align-middle", column.className)}>
+                    <td key={column.key} className={cn(column.className)}>
                       {column.render(row)}
                     </td>
                   ))}
