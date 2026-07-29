@@ -59,13 +59,37 @@ function adminArgs(session: AdminAuthSession): AdminArgs {
   };
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Only accept sessions that carry a real database player id. This discards
+ * legacy demo sessions ("demo-admin") left in localStorage by older builds.
+ */
 function readStoredSession(): AdminAuthSession | null {
   try {
     const raw = localStorage.getItem(ADMIN_SESSION_KEY);
-    return raw ? (JSON.parse(raw) as AdminAuthSession) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AdminAuthSession;
+    if (!parsed?.player?.id || !UUID_PATTERN.test(parsed.player.id) || !parsed.player.is_admin) {
+      localStorage.removeItem(ADMIN_SESSION_KEY);
+      return null;
+    }
+    return parsed;
   } catch {
+    localStorage.removeItem(ADMIN_SESSION_KEY);
     return null;
   }
+}
+
+function isAuthFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("admin access required") ||
+    normalized.includes("player not found") ||
+    normalized.includes("invalid input syntax for type uuid") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid credentials")
+  );
 }
 
 function sectionFromHash(): AdminSection {
@@ -131,8 +155,16 @@ export default function AdminPage() {
         ]);
         setSummary(result);
       } catch (error: unknown) {
-        toast.error(getErrorMessage(error));
+        const message = getErrorMessage(error);
         setSummary(null);
+        // A rejected session is unusable — drop it and return to the login form.
+        if (isAuthFailure(message)) {
+          localStorage.removeItem(ADMIN_SESSION_KEY);
+          setSession(null);
+          toast.error("Your admin session expired. Please sign in again.");
+        } else {
+          toast.error(message);
+        }
       } finally {
         setPageLoading(false);
         setRefreshing(false);
