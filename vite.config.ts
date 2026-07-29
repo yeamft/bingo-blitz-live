@@ -17,28 +17,28 @@ export default defineConfig(({ mode }) => ({
   build: {
     rollupOptions: {
       output: {
+        // Keep React in one shared chunk. Over-splitting (themes/sonner/radix into
+        // separate files) caused "Cannot read properties of undefined (reading 'createContext')".
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
 
-          if (id.includes("@supabase")) return "supabase";
-          if (id.includes("@tanstack")) return "tanstack";
-          if (id.includes("@radix-ui")) return "radix";
-          if (id.includes("@hookform") || id.includes("react-hook-form")) return "forms";
-          if (id.includes("lucide-react")) return "icons";
-          if (id.includes("recharts")) return "charts";
-          if (id.includes("date-fns")) return "date-fns";
-          if (id.includes("zod")) return "zod";
-          if (id.includes("sonner")) return "sonner";
-          if (id.includes("embla-carousel-react")) return "embla";
-          if (id.includes("react-day-picker")) return "day-picker";
-          if (id.includes("input-otp")) return "input-otp";
-          if (id.includes("next-themes")) return "themes";
-          if (id.includes("vaul")) return "vaul";
-          if (id.includes("cmdk")) return "cmdk";
-          if (id.includes("react-router-dom")) return "router";
-          if (id.includes("react-dom") || id.includes("/react/")) return "react";
+          const normalized = id.replace(/\\/g, "/");
 
-          return "vendor";
+          if (
+            normalized.includes("/react/") ||
+            normalized.includes("/react-dom/") ||
+            normalized.includes("/scheduler/") ||
+            normalized.endsWith("/react/index.js") ||
+            normalized.includes("react/jsx-runtime") ||
+            normalized.includes("react/jsx-dev-runtime")
+          ) {
+            return "react";
+          }
+
+          if (normalized.includes("@supabase")) return "supabase";
+          if (normalized.includes("recharts") || normalized.includes("d3-")) return "charts";
+          if (normalized.includes("@radix-ui")) return "radix";
+          if (normalized.includes("lucide-react")) return "icons";
         },
       },
     },
@@ -48,6 +48,9 @@ export default defineConfig(({ mode }) => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
-    dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
+    dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
+  },
+  optimizeDeps: {
+    include: ["react", "react-dom", "react/jsx-runtime", "next-themes", "sonner"],
   },
 }));
