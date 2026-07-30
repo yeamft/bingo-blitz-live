@@ -117,6 +117,7 @@ export type Room = {
   active_players_count?: number;
   watcher_count?: number;
   winner_name?: string | null;
+  winner_username?: string | null;
   joined_players?: Array<{
     player_id: string;
     username?: string | null;
@@ -143,13 +144,15 @@ export type RoomPlayer = {
   selected_cartelas?: number[];
   auto_fill?: boolean;
   false_claims?: number;
+  /** Denormalized display name — survives players-table RLS. */
+  username?: string | null;
   card: number[];
   marked: number[];
   joined_at: string;
 };
 
 export type RoomPlayerWithPlayer = RoomPlayer & {
-  player: Player;
+  player?: Player | null;
 };
 
 function isNetworkFetchError(error: unknown): boolean {

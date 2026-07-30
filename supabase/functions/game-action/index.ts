@@ -598,6 +598,42 @@ async function getPlayerOrThrow(player_id: string) {
   return player;
 }
 
+async function getPlayerUsername(player_id: string): Promise<string> {
+  const { data } = await supabase
+    .from("players")
+    .select("username")
+    .eq("id", player_id)
+    .maybeSingle();
+  const username = typeof data?.username === "string" ? data.username.trim() : "";
+  return username || "Player";
+}
+
+async function insertRoomPlayer(row: {
+  room_id: string;
+  player_id: string;
+  role: "player" | "watcher";
+  stake_paid: boolean;
+  selected_cartelas: number[];
+  card: number[];
+  marked?: number[];
+  auto_fill?: boolean;
+  false_claims?: number;
+}) {
+  const username = await getPlayerUsername(row.player_id);
+  return supabase.from("room_players").insert({
+    room_id: row.room_id,
+    player_id: row.player_id,
+    role: row.role,
+    stake_paid: row.stake_paid,
+    selected_cartelas: row.selected_cartelas,
+    auto_fill: row.auto_fill ?? true,
+    false_claims: row.false_claims ?? 0,
+    card: row.card,
+    marked: row.marked ?? [FREE],
+    username,
+  });
+}
+
 function normalizePlayerWallets<T extends { wallet_balance?: number | null; main_wallet_balance?: number | null; play_wallet_balance?: number | null }>(player: T) {
   const play = Number(player.play_wallet_balance ?? player.wallet_balance ?? 0);
   const main = Number(player.main_wallet_balance ?? player.wallet_balance ?? 0);
@@ -972,14 +1008,12 @@ async function joinExistingPublicRoom(
     .update({ derash: room.derash + totalStake })
     .eq("id", room.id);
 
-  await supabase.from("room_players").insert({
+  await insertRoomPlayer({
     room_id: room.id,
     player_id,
     role: "player",
     stake_paid: true,
     selected_cartelas: cartelas,
-    auto_fill: true,
-    false_claims: 0,
     card: combineCards(cartelas),
     marked: [FREE],
   });
@@ -1176,14 +1210,12 @@ async function confirmCartelaPurchase(room_id: string, player_id: string) {
     await updatePlayerWallets(player_id, { play_wallet_balance: newBal });
     await recordTx(player_id, room.id, "stake", -totalStake, newBal);
     await supabase.from("rooms").update({ derash: room.derash + totalStake }).eq("id", room.id);
-    await supabase.from("room_players").insert({
+    await insertRoomPlayer({
       room_id: room.id,
       player_id,
       role: "player",
       stake_paid: true,
       selected_cartelas: cartelas,
-      auto_fill: true,
-      false_claims: 0,
       card: combineCards(cartelas),
       marked: [FREE],
     });
@@ -1406,14 +1438,12 @@ Deno.serve(async (req: Request) => {
           .from("rooms")
           .update({ derash: totalStake })
           .eq("id", room.id);
-        await supabase.from("room_players").insert({
+        await insertRoomPlayer({
           room_id: room.id,
           player_id,
           role: "player",
           stake_paid: true,
           selected_cartelas: cartelas,
-          auto_fill: true,
-          false_claims: 0,
           card: combineCards(cartelas),
           marked: [FREE],
         });
@@ -1502,15 +1532,14 @@ Deno.serve(async (req: Request) => {
           const totalStake = joinStake(room);
           const playerWallet = normalizePlayerWallets(p);
           if (playerWallet.play_wallet_balance < totalStake) {
-            await supabase.from("room_players").insert({
+            await insertRoomPlayer({
               room_id: room.id,
               player_id,
               role: "watcher",
               stake_paid: false,
               selected_cartelas: [],
-              auto_fill: true,
-              false_claims: 0,
               card: [],
+              marked: [FREE],
             });
             await audit(room.id, player_id, "join_watcher_no_funds", {
               required: totalStake,
@@ -1530,14 +1559,12 @@ Deno.serve(async (req: Request) => {
             .from("rooms")
             .update({ derash: room.derash + totalStake })
             .eq("id", room.id);
-          await supabase.from("room_players").insert({
+          await insertRoomPlayer({
             room_id: room.id,
             player_id,
             role: "player",
             stake_paid: true,
             selected_cartelas: cartelas,
-            auto_fill: true,
-            false_claims: 0,
             card: combineCards(cartelas),
             marked: [FREE],
           });
@@ -1552,15 +1579,14 @@ Deno.serve(async (req: Request) => {
           if (Array.isArray(cartelas) && cartelas.length > 0) {
             return json({ error: "Game already started" }, 400);
           }
-          await supabase.from("room_players").insert({
+          await insertRoomPlayer({
             room_id: room.id,
             player_id,
             role: "watcher",
             stake_paid: false,
             selected_cartelas: [],
-            auto_fill: true,
-            false_claims: 0,
             card: [],
+            marked: [FREE],
           });
           await audit(room.id, player_id, "join_watcher", {});
         }
@@ -1786,11 +1812,17 @@ Deno.serve(async (req: Request) => {
         await updatePlayerWallets(winnerId, { play_wallet_balance: newBal });
         await recordTx(winnerId, room_id, "payout", payout, newBal);
 
+        const winnerUsername =
+          typeof winner.username === "string" && winner.username.trim()
+            ? winner.username.trim()
+            : "Player";
+
         await supabase
           .from("rooms")
           .update({
             status: "finished",
             winner_id: winnerId,
+            winner_username: winnerUsername,
             winning_line: win.name,
             pending_winner_id: null,
             pending_winning_line: null,
@@ -1801,8 +1833,9 @@ Deno.serve(async (req: Request) => {
         await audit(room_id, player_id, "claim_verified_immediate", {
           line: win.name,
           payout,
+          winner_username: winnerUsername,
         });
-        return json({ ok: true, winner: true, payout, line: win.name });
+        return json({ ok: true, winner: true, payout, line: win.name, winner_username: winnerUsername });
       }
 
       case "verify_bingo": {
@@ -1835,11 +1868,17 @@ Deno.serve(async (req: Request) => {
           await updatePlayerWallets(winnerId, { play_wallet_balance: newBal });
           await recordTx(winnerId, room_id, "payout", payout, newBal);
 
+          const winnerUsername =
+            typeof winner.username === "string" && winner.username.trim()
+              ? winner.username.trim()
+              : "Player";
+
           await supabase
             .from("rooms")
             .update({
               status: "finished",
               winner_id: winnerId,
+              winner_username: winnerUsername,
               winning_line: room.pending_winning_line,
               pending_winner_id: null,
               pending_winning_line: null,
@@ -1847,8 +1886,12 @@ Deno.serve(async (req: Request) => {
               finished_at: new Date().toISOString(),
             })
             .eq("id", room_id);
-          await audit(room_id, host_player_id, "claim_verified", { winnerId, payout });
-          return json({ ok: true, approved: true });
+          await audit(room_id, host_player_id, "claim_verified", {
+            winnerId,
+            payout,
+            winner_username: winnerUsername,
+          });
+          return json({ ok: true, approved: true, winner_username: winnerUsername });
         }
 
         const penalty = Math.max(1, Math.floor(room.stake_amount * 0.2));
@@ -2518,7 +2561,10 @@ Deno.serve(async (req: Request) => {
             watcher_count: joinedPlayers.filter((entry) => entry.role === "watcher").length,
             called_numbers: calledNumbers,
             last_called_number: calledNumbers.length ? calledNumbers[calledNumbers.length - 1] : null,
-            winner_name: winnerUser?.username ? String(winnerUser.username) : null,
+            winner_name:
+              (typeof (room as { winner_username?: string | null }).winner_username === "string" &&
+                (room as { winner_username?: string | null }).winner_username) ||
+              (winnerUser?.username ? String(winnerUser.username) : null),
             joined_players: joinedPlayers,
           };
         });
@@ -2823,6 +2869,7 @@ Deno.serve(async (req: Request) => {
             status: "lobby",
             current_index: -1,
             winner_id: null,
+            winner_username: null,
             winning_line: null,
             pending_winner_id: null,
             pending_winning_line: null,
@@ -2856,6 +2903,7 @@ Deno.serve(async (req: Request) => {
             status: "lobby",
             current_index: -1,
             winner_id: null,
+            winner_username: null,
             winning_line: null,
             pending_winner_id: null,
             pending_winning_line: null,

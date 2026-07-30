@@ -147,6 +147,12 @@ function RoomInner({
   );
   const current = room.current_index >= 0 ? room.call_sequence[room.current_index] : null;
   const winner = players.find((p) => p.player_id === room.winner_id);
+  const winnerUsername =
+    winner?.username ||
+    winner?.player?.username ||
+    room.winner_username ||
+    room.winner_name ||
+    null;
   const iWon = room.winner_id === myPlayerId;
   const playerCount = players.filter((p) => p.role === "player").length;
   const watcherCount = players.filter((p) => p.role === "watcher").length;
@@ -368,7 +374,7 @@ function RoomInner({
             <DialogTitle>{t("winner")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 text-sm">
-            <p><span className="font-semibold">{t("winningPlayer")}:</span> {winner ? winner.player.username : t("noWinner")}</p>
+            <p><span className="font-semibold">{t("winningPlayer")}:</span> {winnerUsername ?? t("noWinner")}</p>
             <p><span className="font-semibold">{t("winnerBoard")}:</span> {`Card ${winningCardIndex + 1}`}</p>
             <p><span className="font-semibold">{t("pattern")}:</span> {room.winning_line ?? "—"}</p>
             <p><span className="font-semibold">{t("winningPayout")}:</span> {finalPayout}</p>
@@ -589,7 +595,7 @@ function RoomInner({
               {t("winner")}
             </p>
             <h2 className="text-2xl font-extrabold mt-0.5">
-              {winner ? winner.player.username : t("noWinner")}
+              {winnerUsername ?? t("noWinner")}
             </h2>
             {iWon && <p className="text-accent font-bold mt-1">🎉 {t("youWon")}</p>}
             {room.winning_line && (
@@ -600,7 +606,7 @@ function RoomInner({
             {winner && <p className="text-warning font-extrabold text-xl mt-2">{t("payout")}: {finalPayout}</p>}
           </div>
           <div className="grid grid-cols-2 gap-2 w-full">
-            <Stat icon={<Trophy className="h-3 w-3" />} label={t("winningPlayer")} value={winner ? winner.player.username : "—"} />
+            <Stat icon={<Trophy className="h-3 w-3" />} label={t("winningPlayer")} value={winnerUsername ?? "—"} />
             <Stat icon={<Coins className="h-3 w-3 text-warning" />} label={t("winningPayout")} value={String(finalPayout)} highlight />
           </div>
           {winnerCard.length > 0 && (
