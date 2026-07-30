@@ -29,8 +29,8 @@ import {
   Globe,
   Hand,
   Zap,
-  Check,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { resolvePlayerCards, splitCards, readSessionCartelas } from "@/lib/cartela";
 
@@ -496,48 +496,26 @@ function RoomInner({
             )}
           </div>
           {!isWatcher && myCards.length > 0 && (
-            <div className="mb-3 rounded-2xl border border-border bg-card p-2 shadow-card">
-              <p className="mb-2 px-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-                Marking mode
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleAutoFillToggle(true)}
-                  aria-pressed={localAutoFill}
-                  className={cn(
-                    "flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-bold transition-colors",
-                    localAutoFill
-                      ? "border-primary bg-primary text-primary-foreground shadow-card"
-                      : "border-border bg-secondary/40 text-muted-foreground",
-                  )}
-                >
-                  <Zap className="h-4 w-4" /> Auto
-                  {localAutoFill && <Check className="h-3.5 w-3.5" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAutoFillToggle(false)}
-                  aria-pressed={!localAutoFill}
-                  className={cn(
-                    "flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-bold transition-colors",
-                    !localAutoFill
-                      ? "border-accent bg-accent text-accent-foreground shadow-card"
-                      : "border-border bg-secondary/40 text-muted-foreground",
-                  )}
-                >
-                  <Hand className="h-4 w-4" /> Manual
-                  {!localAutoFill && <Check className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <p className="mt-2 px-1 text-xs text-muted-foreground">
-                {localAutoFill
-                  ? "Called numbers are marked automatically."
-                  : room.status === "live"
-                    ? "Tap a highlighted called number to mark it. Tap again to undo."
-                    : "Manual marking becomes active when the game starts."}
-              </p>
-            </div>
+            <label
+              htmlFor="marking-mode"
+              className="mb-2 flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-border bg-card px-2.5 py-1.5 shadow-card"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-bold">
+                {localAutoFill ? (
+                  <Zap className="h-3.5 w-3.5 text-primary" />
+                ) : (
+                  <Hand className="h-3.5 w-3.5 text-accent" />
+                )}
+                {localAutoFill ? "Auto marking" : "Manual marking"}
+              </span>
+              <Switch
+                id="marking-mode"
+                checked={localAutoFill}
+                onCheckedChange={handleAutoFillToggle}
+                aria-label="Toggle auto marking"
+                className="h-5 w-9"
+              />
+            </label>
           )}
           {myCards.length > 0 ? (
             localAutoFill ? (
